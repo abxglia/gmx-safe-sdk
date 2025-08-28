@@ -1,0 +1,25 @@
+# MongoDB Database Integration Requirements for GMX Safe Trading System
+
+# Core MongoDB driver
+pymongo>=4.3.0
+
+# Data validation and serialization (optional but recommended)
+pydantic>=2.0.0
+
+# For datetime handling (usually included with Python)
+python-dateutil>=2.8.0
+
+# For data analysis and reporting (optional)
+pandas>=2.0.0
+numpy>=1.24.0
+
+# For data visualization in reports (optional) 
+matplotlib>=3.7.0
+seaborn>=0.12.0
+
+# Existing requirements (if not already installed)
+flask>=2.3.0
+flask-cors>=4.0.0
+web3>=6.0.0
+safe-eth-py>=4.0.0
+python-dotenv>=1.0.0

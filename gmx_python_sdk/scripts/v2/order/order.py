@@ -14,6 +14,7 @@ from ..gmx_utils import (
 )
 from ..gas_utils import get_execution_fee
 from ..approve_token_for_spend import check_if_approved
+from ..safe_utils import build_safe_tx_payload, save_safe_tx_payload, propose_safe_transaction, get_safe_next_nonce
 
 is_newer_version, version = check_web3_correct_version()
 if is_newer_version:
@@ -113,6 +114,73 @@ class Order:
                 'nonce': nonce
             }
         )
+
+        # If Safe mode is enabled, do not send from EOA. Produce a Safe tx payload instead.
+        if getattr(self.config, 'use_safe_transactions', False):
+            try:
+                to_address = self._exchange_router_contract_obj.address
+            except AttributeError:
+                to_address = self._exchange_router_contract_obj.address
+
+            safe_payload = build_safe_tx_payload(
+                config=self.config,
+                to=to_address,
+                value=int(raw_txn.get('value', 0)),
+                data=raw_txn.get('data'),
+                gas=int(raw_txn.get('gas', 0)),
+                max_fee_per_gas=int(raw_txn.get('maxFeePerGas', 0)),
+                max_priority_fee_per_gas=int(raw_txn.get('maxPriorityFeePerGas', 0))
+            )
+
+            filename = save_safe_tx_payload(safe_payload, prefix='gmx_multicall')
+            self.log.info("Safe tx payload saved: {}".format(filename))
+            
+            # Try to propose to Safe Transaction Service if API details are configured
+            safe_api_url = getattr(self.config, 'safe_api_url', None)
+            safe_api_key = getattr(self.config, 'safe_api_key', None)
+            
+            if safe_api_url:
+                try:
+                    # Get next nonce using Safe SDK (no API key needed)
+                    nonce = get_safe_next_nonce(
+                        safe_address=self.config.safe_address,
+                        rpc_url=self.config.rpc,
+                        safe_api_url=safe_api_url
+                    )
+                    
+                    # Propose transaction using Safe SDK
+                    proposal_result = propose_safe_transaction(
+                        safe_address=self.config.safe_address,
+                        to=to_address,
+                        value=str(int(raw_txn.get('value', 0))),
+                        data=raw_txn.get('data', '0x'),
+                        operation=0,  # CALL
+                        nonce=nonce,
+                        safe_api_url=safe_api_url,
+                        api_key=safe_api_key,
+                        rpc_url=self.config.rpc,
+                        private_key=self.config.private_key
+                    )
+                    
+                    if proposal_result.get('status') == 'success':
+                        safe_tx_hash = proposal_result.get('safeTxHash')
+                        self.log.info("✅ Transaction proposed to Safe: {}".format(safe_tx_hash))
+                        self.log.info("🔗 View in Safe wallet or approve via Safe Transaction Service")
+                        # Store for programmatic access
+                        self.last_safe_tx_proposal = proposal_result
+                    else:
+                        self.log.warning("⚠️ Could not propose to Safe API: {}".format(proposal_result.get('error')))
+                        self.log.info("💡 Use the saved payload manually: {}".format(filename))
+                        
+                except Exception as e:
+                    self.log.warning("⚠️ Safe API proposal failed: {}".format(str(e)))
+                    self.log.info("💡 Use the saved payload manually: {}".format(filename))
+            else:
+                self.log.info("💡 Submit this payload via your Safe (Transaction Builder or API) to execute using Safe funds.")
+            
+            # Store for programmatic access
+            self.last_safe_tx_payload = safe_payload
+            return
 
         if not self.debug_mode:
             signed_txn = self._connection.eth.account.sign_transaction(

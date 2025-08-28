@@ -1,0 +1,7 @@
+flask
+flask-cors
+dotenv
+safe-eth-py
+safe-cli
+pymongo
+pydantic

@@ -144,6 +144,9 @@ class ConfigManager:
         self.user_wallet_address = None
         self.private_key = None
         self.tg_bot_token = None
+        # Safe (Gnosis Safe) support
+        self.use_safe_transactions = False
+        self.safe_address = None
 
     def set_config(self, filepath: str = os.path.join(base_dir, "config.yaml")):
 
@@ -166,6 +169,29 @@ class ConfigManager:
 
     def set_private_key(self, value):
         self.private_key = value
+
+    # --- Safe helpers ---
+    def enable_safe_transactions(self, safe_address: str, safe_api_url: str = None, safe_api_key: str = None):
+        """
+        Enable routing of all onchain interactions through a Safe.
+
+        When enabled:
+        - Allowance checks and balances use the Safe address
+        - Token approvals and GMX contract calls are executed via Safe
+        - Transactions can be auto-proposed to Safe Transaction Service
+        """
+        self.use_safe_transactions = True
+        self.safe_address = safe_address
+        self.safe_api_url = safe_api_url
+        self.safe_api_key = safe_api_key
+        # Ensure user wallet address is set to Safe for onchain reads
+        self.user_wallet_address = safe_address
+
+    def disable_safe_transactions(self):
+        self.use_safe_transactions = False
+        self.safe_address = None
+        self.safe_api_url = None
+        self.safe_api_key = None
 
 
 def create_connection(config):

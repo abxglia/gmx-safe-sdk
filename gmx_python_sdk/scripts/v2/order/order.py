@@ -29,7 +29,10 @@ class Order:
         index_token_address: str, is_long: bool, size_delta: float,
         initial_collateral_delta_amount: str, slippage_percent: float,
         swap_path: list, max_fee_per_gas: int = None, auto_cancel: bool = False,
-        debug_mode: bool = False, execution_buffer: float = 1.3
+        debug_mode: bool = False, execution_buffer: float = 1.3,
+        eip7702_delegation_manager=None, delegate_address=None,
+        external_collateral_transfer: bool = False,
+        receiver_address_override: str | None = None
     ) -> None:
 
         self.config = config
@@ -45,6 +48,13 @@ class Order:
         self.debug_mode = debug_mode
         self.auto_cancel = auto_cancel
         self.execution_buffer = execution_buffer
+        self.eip7702_delegation_manager = eip7702_delegation_manager
+        self.delegate_address = delegate_address
+        # If external collateral was transferred (e.g., via EIP-7702 DelegationManager),
+        # skip approval and token transfer within GMX router multicall
+        self.external_collateral_transfer = external_collateral_transfer
+        # If provided, proceeds/position ownership receiver override (e.g., DelegationManager)
+        self.receiver_address_override = receiver_address_override
 
         if self.debug_mode:
             logging.info("Execution buffer set to: {:.2f}%".format(
@@ -72,6 +82,9 @@ class Order:
         """
         Check for Approval
         """
+        if getattr(self, 'external_collateral_transfer', False):
+            # Collateral already delivered externally; skip approvals entirely
+            return
         spender = contract_map[self.config.chain]["syntheticsrouter"]['contract_address']
 
         check_if_approved(self.config,
@@ -79,7 +92,9 @@ class Order:
                           self.collateral_address,
                           self.initial_collateral_delta_amount,
                           self.max_fee_per_gas,
-                          approve=True)
+                          approve=True,
+                          eip7702_delegation_manager=self.eip7702_delegation_manager,
+                          delegate_address=self.delegate_address)
 
     def _submit_transaction(
         self, user_wallet_address: str, value_amount: float,
@@ -93,8 +108,10 @@ class Order:
             wallet_address = Web3.to_checksum_address(user_wallet_address)
         except AttributeError:
             wallet_address = Web3.toChecksumAddress(user_wallet_address)
+        # Use actual_sender_address for nonce if available (for EIP-7702 delegation)
+        nonce_address = getattr(self.config, 'actual_sender_address', None) or wallet_address
         nonce = self._connection.eth.get_transaction_count(
-            wallet_address
+            nonce_address, 'pending'
         )
 
         raw_txn = self._exchange_router_contract_obj.functions.multicall(
@@ -270,8 +287,9 @@ class Order:
             )
         )
 
-        # Dont need to check approval when closing
-        if not is_close and not self.debug_mode:
+        # Dont need to check approval when closing. Also skip approval when collateral
+        # was already transferred externally (e.g., DelegationManager.transferDelegatedTokens)
+        if not is_close and not self.debug_mode and not getattr(self, 'external_collateral_transfer', False):
             self.check_for_approval()
 
         execution_fee = int(execution_fee * self.execution_buffer)
@@ -404,12 +422,21 @@ class Order:
                         'execution_price'] > acceptable_price_in_usd:
                     raise Exception("Execution price falls outside acceptable price!")
 
-        user_wallet_address = convert_to_checksum_address(
+        # Sender must always be the configured EOA (delegate). Receiver can be overridden.
+        sender_wallet_address = convert_to_checksum_address(
             self.config,
             user_wallet_address
         )
+        # For close orders, override the user_wallet_address in order args to receive proceeds
+        # For open orders, use the sender address
+        order_user_wallet = self.receiver_address_override if (is_close and self.receiver_address_override) else sender_wallet_address
+        try:
+            order_user_wallet = convert_to_checksum_address(self.config, order_user_wallet)
+        except Exception:
+            # In case override already checksummed
+            order_user_wallet = order_user_wallet
 
-        cancellation_receiver = user_wallet_address
+        cancellation_receiver = order_user_wallet
 
         eth_zero_address = convert_to_checksum_address(
             self.config,
@@ -428,7 +455,7 @@ class Order:
 
         arguments = (
             (
-                user_wallet_address,
+                order_user_wallet,
                 cancellation_receiver,
                 eth_zero_address,
                 ui_ref_address,
@@ -460,16 +487,23 @@ class Order:
         value_amount = execution_fee
         if self.collateral_address != '0x82aF49447D8a07e3bd95BD0d56f35241523fBab1' and not is_close:
 
-            multicall_args = [
-                HexBytes(self._send_wnt(value_amount)),
-                HexBytes(
-                    self._send_tokens(
-                        self.collateral_address,
-                        initial_collateral_delta_amount
-                    )
-                ),
-                HexBytes(self._create_order(arguments))
-            ]
+            if getattr(self, 'external_collateral_transfer', False):
+                # Collateral already at GMX receiver; only pay execution fee + create order
+                multicall_args = [
+                    HexBytes(self._send_wnt(value_amount)),
+                    HexBytes(self._create_order(arguments))
+                ]
+            else:
+                multicall_args = [
+                    HexBytes(self._send_wnt(value_amount)),
+                    HexBytes(
+                        self._send_tokens(
+                            self.collateral_address,
+                            initial_collateral_delta_amount
+                        )
+                    ),
+                    HexBytes(self._create_order(arguments))
+                ]
 
         else:
 
@@ -483,8 +517,9 @@ class Order:
                 HexBytes(self._create_order(arguments))
             ]
 
+        # Submit from the sender EOA (delegate)
         self._submit_transaction(
-            user_wallet_address, value_amount, multicall_args, self._gas_limits
+            sender_wallet_address, value_amount, multicall_args, self._gas_limits
         )
 
     def _create_order(self, arguments):

@@ -1,0 +1,140 @@
+# EIP7702 GMX API Configuration
+# This file contains configuration settings for the EIP7702 delegation-based GMX trading API
+
+# API Configuration
+api:
+  port: 5002
+  host: "0.0.0.0"
+  debug: true
+
+# EIP7702 Delegation Configuration
+eip7702:
+  # Address of the EIP7702 Delegation Manager contract
+  delegation_manager_address: "0x0000000000000000000000000000000000000000"  # Replace with actual address
+  
+  # Your address that has received delegation (the delegate)
+  delegate_address: "0x0000000000000000000000000000000000000000"  # Replace with your address
+  
+  # Private key for signing transactions
+  private_key: ""  # Set via environment variable PRIVATE_KEY
+
+# Network Configuration
+network:
+  # RPC endpoint for Arbitrum
+  rpc_url: "https://arb1.arbitrum.io/rpc"
+  
+  # Chain ID for Arbitrum
+  chain_id: 42161
+  
+  # Network name
+  network_name: "arbitrum"
+
+# GMX V2 Configuration
+gmx:
+  # GMX Exchange Router address on Arbitrum
+  exchange_router: "0x7452c558d45f8afC8c83dAe62C3f8A5BE19c71f6"
+  
+  # USDC token address on Arbitrum
+  usdc_address: "0xaf88d065e77c8cC2239327C5EDb3A432268e5831"
+  
+  # Default slippage tolerance (0.5%)
+  default_slippage: 0.005
+
+# Safe Configuration (Optional)
+safe:
+  # Safe API URL for transaction service
+  api_url: ""  # Set via environment variable SAFE_API_URL
+  
+  # Safe API key for transaction service
+  api_key: ""  # Set via environment variable SAFE_TRANSACTION_SERVICE_API_KEY
+
+# Database Configuration
+database:
+  # MongoDB connection string
+  connection_string: "mongodb://localhost:27017/"
+  
+  # Database name
+  database_name: "gmx_eip7702"
+  
+  # Collection names
+  collections:
+    positions: "positions"
+    transactions: "transactions"
+    signals: "signals"
+    delegations: "delegations"
+
+# Trading Configuration
+trading:
+  # Default position size in USD
+  default_position_size_usd: 2.02
+  
+  # Default leverage
+  default_leverage: 1
+  
+  # Maximum position size in USD
+  max_position_size_usd: 1000.0
+  
+  # Maximum leverage allowed
+  max_leverage: 10
+  
+  # Minimum time between trades (seconds)
+  min_trade_interval: 60
+
+# Logging Configuration
+logging:
+  level: "INFO"
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+  
+  # Log file configuration
+  file:
+    enabled: true
+    path: "logs/eip7702_gmx_api.log"
+    max_size_mb: 100
+    backup_count: 5
+
+# Security Configuration
+security:
+  # Rate limiting
+  rate_limit:
+    enabled: true
+    requests_per_minute: 60
+  
+  # API key authentication
+  api_key_auth:
+    enabled: false
+    header_name: "X-API-Key"
+  
+  # CORS settings
+  cors:
+    enabled: true
+    allowed_origins: ["*"]
+    allowed_methods: ["GET", "POST", "PUT", "DELETE"]
+    allowed_headers: ["Content-Type", "Authorization"]
+
+# Monitoring Configuration
+monitoring:
+  # Health check interval (seconds)
+  health_check_interval: 30
+  
+  # Metrics collection
+  metrics:
+    enabled: true
+    port: 9090
+  
+  # Alerting
+  alerts:
+    enabled: false
+    webhook_url: ""
+    slack_webhook: ""
+
+# Environment Variables Required
+# The following environment variables must be set:
+# 
+# DELEGATE_ADDRESS - Your address that has received delegation
+# PRIVATE_KEY - Your private key for signing transactions
+# EIP7702_DELEGATION_MANAGER_ADDRESS - Address of the EIP7702 Delegation Manager contract
+# RPC_URL - RPC endpoint for the blockchain network
+# MONGODB_CONNECTION_STRING - MongoDB connection string
+# SAFE_API_URL - Safe transaction service API URL (optional)
+# SAFE_TRANSACTION_SERVICE_API_KEY - Safe API key (optional)
+# GMX_EIP7702_API_PORT - Port for the API server (default: 5002)

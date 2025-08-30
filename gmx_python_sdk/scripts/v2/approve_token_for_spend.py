@@ -15,7 +15,9 @@ def check_if_approved(
         token_to_approve: str,
         amount_of_tokens_to_spend: int,
         max_fee_per_gas,
-        approve: bool):
+        approve: bool,
+        eip7702_delegation_manager=None,
+        delegate_address=None):
     """
     For a given chain, check if a given amount of tokens is approved for spend by a contract, and
     approve is passed as true
@@ -32,6 +34,10 @@ def check_if_approved(
         amount of tokens to spend in expanded decimals.
     approve : bool
         Pass as True if we want to approve spend incase it is not already.
+    eip7702_delegation_manager : object, optional
+        EIP7702 delegation manager instance for checking delegated funds.
+    delegate_address : str, optional
+        Delegate address for EIP7702 delegation balance checking.
 
     Raises
     ------
@@ -66,18 +72,28 @@ def check_if_approved(
     token_contract_obj = connection.eth.contract(address=token_to_approve,
                                                  abi=token_contract_abi)
 
-    # TODO - for AVAX support this will need to incl WAVAX address
-    if token_checksum_address == "0x82aF49447D8a07e3bd95BD0d56f35241523fBab1":
-        try:
-            balance_of = connection.eth.getBalance(user_checksum_address)
-        except AttributeError:
-            balance_of = connection.eth.get_balance(user_checksum_address)
-
+    # Check balance - handle EIP7702 delegation if provided
+    if eip7702_delegation_manager and delegate_address:
+        # Use EIP7702 delegation manager to check available funds
+        if eip7702_delegation_manager.can_use_delegated_funds(
+            delegate_address, amount_of_tokens_to_spend, token_to_approve
+        ):
+            balance_of = amount_of_tokens_to_spend  # Set to required amount for approval check
+        else:
+            raise Exception("Insufficient delegated balance!")
     else:
-        balance_of = token_contract_obj.functions.balanceOf(user_checksum_address).call()
+        # Standard balance check
+        # TODO - for AVAX support this will need to incl WAVAX address
+        if token_checksum_address == "0x82aF49447D8a07e3bd95BD0d56f35241523fBab1":
+            try:
+                balance_of = connection.eth.getBalance(user_checksum_address)
+            except AttributeError:
+                balance_of = connection.eth.get_balance(user_checksum_address)
+        else:
+            balance_of = token_contract_obj.functions.balanceOf(user_checksum_address).call()
 
-    if balance_of < amount_of_tokens_to_spend:
-        raise Exception("Insufficient balance!")
+        if balance_of < amount_of_tokens_to_spend:
+            raise Exception("Insufficient balance!")
 
     amount_approved = token_contract_obj.functions.allowance(
         user_checksum_address,
@@ -155,7 +171,7 @@ def check_if_approved(
             else:
                 print("💡 Submit this approval payload via your Safe before creating orders")
         else:
-            nonce = connection.eth.get_transaction_count(user_checksum_address)
+            nonce = connection.eth.get_transaction_count(user_checksum_address, 'pending')
 
             arguments = spender_checksum_address, amount_of_tokens_to_spend
             raw_txn = token_contract_obj.functions.approve(

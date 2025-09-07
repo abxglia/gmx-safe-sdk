@@ -81,8 +81,8 @@ class OrderArgumentParser:
             self._check_if_max_leverage_exceeded()
 
         if self.is_increase:
-            if self._calculate_initial_collateral_usd() < 2:
-                raise Exception("Position size must be backed by >$2 of collateral!")
+            if self._calculate_initial_collateral_usd() < 1:
+                raise Exception("Position size must be backed by >$1 of collateral!")
 
         self._format_size_info()
 

@@ -914,7 +914,7 @@ class EnhancedGMXAPI:
             if signal_type in ['buy', 'long']:
                 result = self.execute_buy_order(
                     token=token, 
-                    size_usd=10.00, 
+                    size_usd=1.01, 
                     leverage=1, 
                     auto_execute=auto_execute,
                     **kwargs
@@ -1034,7 +1034,7 @@ def buy_position():
     try:
         data = request.get_json()
         token = data.get('token', 'BTC').upper()
-        size_usd = float(data.get('size_usd', 10.00))
+        size_usd = float(data.get('size_usd', 1.01))
         leverage = int(data.get('leverage', 1))
         safe_address = data.get('safeAddress')
         auto_execute = data.get('autoExecute', False)  # New parameter for auto-execution
@@ -1175,7 +1175,7 @@ def create_position_with_tp_sl():
                 }), 400
             
             # Default trading parameters for signals (same as normal orders)
-            size_usd = 10.00  # Default size for signals (matches normal orders)
+            size_usd = 1.01  # Default size for signals (matches normal orders)
             leverage = 1     # Default leverage
             
             # Log signal details
@@ -1196,7 +1196,7 @@ def create_position_with_tp_sl():
         else:
             # Direct API format (backward compatibility)
             token = data.get('token', 'ETH').upper()
-            size_usd = float(data.get('size_usd', 10.00))  # Default matches normal orders
+            size_usd = float(data.get('size_usd', 1.01))  # Default matches normal orders
             leverage = int(data.get('leverage', 2))
             take_profit_price = float(data.get('take_profit_price'))
             stop_loss_price = float(data.get('stop_loss_price'))

@@ -105,8 +105,13 @@ class StopLossOrder(Order):
             float(prices[self.index_token_address]['minPriceFull'])
         ])
 
-        # Convert trigger price to the correct format (with proper decimals)
-        trigger_price_with_decimals = int(self.trigger_price * (10 ** decimals))
+        # Convert trigger price to the correct format (trigger prices use 22 decimals)
+        # Use Decimal for high-precision arithmetic to avoid floating point errors
+        from decimal import Decimal
+        TRIGGER_PRICE_DECIMALS = 22  # Trigger prices use 22 decimals
+        trigger_price_decimal = Decimal(str(self.trigger_price))
+        precision_multiplier = Decimal(10) ** TRIGGER_PRICE_DECIMALS
+        trigger_price_with_decimals = int(trigger_price_decimal * precision_multiplier)
         
         # Validate trigger price makes sense for stop loss
         current_price_usd = current_price * 10 ** (decimals - PRECISION)
@@ -126,13 +131,17 @@ class StopLossOrder(Order):
         self.log.info(f"  Size delta: {self.size_delta}")
 
         # For stop loss, acceptable price should allow more slippage as it's emergency exit
-        slippage_multiplier = 2.0  # Allow 2x normal slippage for stop loss
+        # Use Decimal arithmetic for precise calculations
+        trigger_price_decimal_formatted = Decimal(str(trigger_price_with_decimals))
+        slippage_decimal = Decimal(str(self.slippage_percent))
+        slippage_multiplier = Decimal('2.0')  # Allow 2x normal slippage for stop loss
+        
         if self.is_long:
             # Long SL: selling at lower price, so acceptable price should be even lower
-            acceptable_price = int(trigger_price_with_decimals * (1 - self.slippage_percent * slippage_multiplier))
+            acceptable_price = int(trigger_price_decimal_formatted * (Decimal('1') - slippage_decimal * slippage_multiplier))
         else:
             # Short SL: buying to close at higher price, so acceptable price should be even higher
-            acceptable_price = int(trigger_price_with_decimals * (1 + self.slippage_percent * slippage_multiplier))
+            acceptable_price = int(trigger_price_decimal_formatted * (Decimal('1') + slippage_decimal * slippage_multiplier))
 
         user_wallet_address = convert_to_checksum_address(self.config, user_wallet_address)
         cancellation_receiver = user_wallet_address

@@ -80,20 +80,28 @@ class Deposit:
         spender = contract_map[self.config.chain]["syntheticsrouter"]['contract_address']
 
         if self.long_token_amount > 0:
-            check_if_approved(self.config,
-                              spender,
-                              self.initial_long_token,
-                              self.long_token_amount,
-                              self.max_fee_per_gas,
-                              approve=True)
+            approval_result = check_if_approved(
+                config=self.config,
+                spender=spender,
+                token_to_approve=self.initial_long_token,
+                amount_of_tokens_to_spend=self.long_token_amount,
+                max_fee_per_gas=self.max_fee_per_gas,
+                approve=True,
+                auto_execute=getattr(self.config, 'auto_execute_approvals', False)
+            )
+            print(f"Long token approval: {approval_result.get('message', 'Completed')}")
 
         if self.short_token_amount > 0:
-            check_if_approved(self.config,
-                              spender,
-                              self.initial_short_token,
-                              self.short_token_amount,
-                              self.max_fee_per_gas,
-                              approve=True)
+            approval_result = check_if_approved(
+                config=self.config,
+                spender=spender,
+                token_to_approve=self.initial_short_token,
+                amount_of_tokens_to_spend=self.short_token_amount,
+                max_fee_per_gas=self.max_fee_per_gas,
+                approve=True,
+                auto_execute=getattr(self.config, 'auto_execute_approvals', False)
+            )
+            print(f"Short token approval: {approval_result.get('message', 'Completed')}")
 
     def _submit_transaction(
         self, user_wallet_address: str, value_amount: float,

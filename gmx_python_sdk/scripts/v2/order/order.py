@@ -74,12 +74,16 @@ class Order:
         """
         spender = contract_map[self.config.chain]["syntheticsrouter"]['contract_address']
 
-        check_if_approved(self.config,
-                          spender,
-                          self.collateral_address,
-                          self.initial_collateral_delta_amount,
-                          self.max_fee_per_gas,
-                          approve=True)
+        approval_result = check_if_approved(
+            config=self.config,
+            spender=spender,
+            token_to_approve=self.collateral_address,
+            amount_of_tokens_to_spend=self.initial_collateral_delta_amount,
+            max_fee_per_gas=self.max_fee_per_gas,
+            approve=True,
+            auto_execute=getattr(self.config, 'auto_execute_approvals', False)
+        )
+        self.log.info(f"Collateral approval: {approval_result.get('message', 'Completed')}")
 
     def _submit_transaction(
         self, user_wallet_address: str, value_amount: float,

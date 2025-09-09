@@ -23,6 +23,8 @@ from gmx_python_sdk.scripts.v2.gmx_utils import ConfigManager
 from gmx_python_sdk.scripts.v2.order.create_increase_order import IncreaseOrder
 from gmx_python_sdk.scripts.v2.order.create_decrease_order import DecreaseOrder
 from gmx_python_sdk.scripts.v2.order.create_position_with_tp_sl import PositionWithTPSL
+from gmx_python_sdk.scripts.v2.order.create_take_profit_order import TakeProfitOrder
+from gmx_python_sdk.scripts.v2.order.create_stop_loss_order import StopLossOrdere
 from gmx_python_sdk.scripts.v2.order.order_argument_parser import OrderArgumentParser
 from gmx_python_sdk.scripts.v2.get.get_open_positions import GetOpenPositions
 
@@ -43,6 +45,7 @@ from gmx_python_sdk.scripts.v2.safe_utils import (
     execute_safe_transaction,
     list_safe_pending_transactions
 )
+from gmx_python_sdk.scripts.v2.approve_token_for_spend import check_if_approved
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
@@ -220,7 +223,7 @@ class EnhancedGMXAPI:
             logger.warning(f"⚠️ Could not check balances: {e}")
     
     def execute_buy_order(self, token: str, size_usd: float, leverage: int = 2, auto_execute: bool = False, **kwargs) -> Dict[str, Any]:
-        """Execute a buy order with full database tracking and optional auto-execution"""
+        """Execute a buy order with database tracking and optional auto-execution"""
         try:
             if not self.initialized:
                 raise Exception("API not initialized")
@@ -234,13 +237,22 @@ class EnhancedGMXAPI:
             username = kwargs.get('username', 'api_user')
             original_signal = kwargs.get('original_signal', {})
             
+            # Calculate amounts
+            collateral_amount = Decimal(str(size_usd)) / Decimal(str(leverage))
+            collateral_amount_usd = float(collateral_amount)
+            
+            logger.info(f"💰 Creating Buy order for {token}...")
+            logger.info(f"   Size: ${size_usd} USD")
+            logger.info(f"   Collateral: ${collateral_amount_usd} USDC")
+            logger.info(f"   Leverage: {leverage}x")
+            
             # Log position creation to database
             position_id = None
             if self.db_connected:
                 position_id = gmx_db.log_order_creation(
                     safe_address=self.safe_address,
                     token=token.upper(),
-                    order_type="buy",
+                    order_type="market_increase",
                     size_usd=size_usd,
                     leverage=leverage,
                     is_long=True,
@@ -248,35 +260,30 @@ class EnhancedGMXAPI:
                     username=username,
                     market_key=token_config['market_key'],
                     index_token=token_config['index_token'],
-                    collateral_token=token_config['collateral_token'],  # Store actual USDC address
+                    collateral_token=token_config['collateral_token'],
                     original_signal=original_signal
                 )
             
-            # Calculate amounts
-            collateral_amount = Decimal(str(size_usd)) / Decimal(str(leverage))
-            collateral_amount_wei = int(collateral_amount * Decimal(10**6))
-            size_delta = int(collateral_amount * Decimal(str(leverage)) * Decimal(10**30))
+            # Set auto_execute_approvals in config for approval transactions
+            original_auto_execute = getattr(self.config, 'auto_execute_approvals', False)
+            if auto_execute:
+                self.config.auto_execute_approvals = True
             
-            logger.info(f"📈 Executing BUY order for {token} (Position ID: {position_id})")
-            logger.info(f"   Size: ${size_usd} USD, Leverage: {leverage}x")
-            
-            # Check Safe wallet funds
-            if not self._ensure_safe_has_funds(float(collateral_amount)):
-                raise Exception("Safe wallet has insufficient funds for trading")
-            
-            # Execute GMX order
+            # Create the order (this will handle approvals during initialization)
             order = IncreaseOrder(
                 config=self.config,
                 market_key=token_config['market_key'],
                 collateral_address=token_config['collateral_token'],
                 index_token_address=token_config['index_token'],
                 is_long=True,
-                size_delta=size_delta,
-                initial_collateral_delta_amount=collateral_amount_wei,
-                slippage_percent=0.005,
-                swap_path=[],
-                debug_mode=False
+                size_delta=int(Decimal(str(size_usd)) * Decimal(10**30)),  # Convert to proper GMX format
+                initial_collateral_delta_amount=int(Decimal(str(collateral_amount_usd)) * Decimal(10**6)),  # Convert USDC to 6 decimals
+                slippage_percent=0.5,
+                swap_path=[]
             )
+            
+            # Reset config to original state
+            self.config.auto_execute_approvals = original_auto_execute
             
             # Extract Safe transaction information
             safe_info = {}
@@ -321,6 +328,9 @@ class EnhancedGMXAPI:
             # Auto-execute the transaction if requested
             execution_result = None
             if auto_execute and safe_tx_hash:
+                logger.info(f"⏳ Waiting for transaction to be processed by Safe API...")
+                time.sleep(15)  # Wait for Safe Transaction Service to process the proposal
+                
                 logger.info(f"🚀 Auto-executing Safe transaction: {safe_tx_hash}")
                 execution_result = self.execute_safe_transaction(safe_tx_hash)
                 if execution_result.get('status') == 'success':
@@ -444,6 +454,9 @@ class EnhancedGMXAPI:
             
             # Auto-execute the transaction if requested
             if auto_execute and safe_tx_hash:
+                logger.info(f"⏳ Waiting for transaction to be processed by Safe API...")
+                time.sleep(15)  # Wait for Safe Transaction Service to process the proposal
+                
                 logger.info(f"🚀 Auto-executing Safe transaction: {safe_tx_hash}")
                 execution_result = self.execute_safe_transaction(safe_tx_hash)
                 if execution_result.get('status') == 'success':
@@ -500,6 +513,139 @@ class EnhancedGMXAPI:
         except Exception:
             return False
     
+    def execute_pending_approval_transactions(self) -> Dict[str, Any]:
+        """Execute any pending approval transactions before creating orders"""
+        try:
+            logger.info("🔍 Checking for pending approval transactions...")
+            
+            # Get pending transactions
+            pending_txs = self.list_pending_transactions(limit=10)
+            approval_executed = False
+            
+            if pending_txs.get('status') == 'success' and pending_txs.get('transactions'):
+                for tx in pending_txs['transactions']:
+                    # Look for USDC approval transactions
+                    tx_data = tx.get('data', '').lower()
+                    tx_to = tx.get('to', '').lower()
+                    
+                    if (tx_to == self.usdc_address.lower() and 
+                        'approval' in tx_data):
+                        
+                        safe_tx_hash = tx.get('safeTxHash')
+                        logger.info(f"📋 Found pending approval transaction: {safe_tx_hash}")
+                        
+                        # Execute the approval transaction
+                        execution_result = self.execute_safe_transaction(safe_tx_hash)
+                        
+                        if execution_result.get('status') == 'success':
+                            logger.info(f"✅ Approval transaction executed: {execution_result.get('txHash')}")
+                            approval_executed = True
+                            # Wait for blockchain confirmation
+                            time.sleep(15)
+                        else:
+                            logger.warning(f"⚠️ Approval execution failed: {execution_result.get('error')}")
+                        break
+                
+                if not approval_executed:
+                    logger.info("ℹ️ No pending approval transactions found")
+            else:
+                logger.warning("⚠️ Could not retrieve pending transactions")
+            
+            return {
+                'status': 'success',
+                'approval_executed': approval_executed,
+                'message': 'Approval transaction check completed'
+            }
+            
+        except Exception as e:
+            logger.error(f"❌ Error executing pending approval transactions: {e}")
+            return {
+                'status': 'error',
+                'error': str(e),
+                'approval_executed': False
+            }
+
+    def ensure_token_approval(self, token_amount_usd: float, auto_execute: bool = False) -> Dict[str, Any]:
+        """Check and ensure USDC approval for GMX trading with auto-execution"""
+        try:
+            if not self.initialized:
+                raise Exception("API not initialized")
+            
+            # GMX Exchange Router address
+            spender_address = self.gmx_exchange_router
+            token_address = self.usdc_address
+            
+            # Convert USD amount to token decimals (USDC uses 6 decimals)
+            amount_in_tokens = int(token_amount_usd * 10**6)
+            
+            logger.info(f"🔍 Checking USDC approval for ${token_amount_usd} ({amount_in_tokens} tokens)")
+            
+            # Set Safe mode in config
+            self.config.use_safe_transactions = True
+            self.config.safe_address = self.safe_address
+            self.config.safe_api_url = os.getenv('SAFE_API_URL')
+            self.config.safe_api_key = os.getenv('SAFE_TRANSACTION_SERVICE_API_KEY')
+            
+            # Check current approval and approve if needed with auto-execution
+            try:
+                # This will check allowance and create/execute approval if needed
+                approval_result = check_if_approved(
+                    config=self.config,
+                    spender=spender_address,
+                    token_to_approve=token_address,
+                    amount_of_tokens_to_spend=amount_in_tokens,
+                    max_fee_per_gas=0,
+                    approve=True,
+                    auto_execute=auto_execute  # Use the auto_execute parameter
+                )
+                
+                logger.info(f"✅ USDC approval check completed: {approval_result.get('message', '')}")
+                
+            except Exception as approval_error:
+                logger.warning(f"⚠️ Approval check encountered issue: {approval_error}")
+                approval_result = {
+                    'status': 'error',
+                    'error': str(approval_error),
+                    'approval_needed': False,
+                    'allowance_sufficient': False
+                }
+            
+            result = {
+                'status': 'success',
+                'message': 'USDC approval check completed',
+                'token_amount_usd': token_amount_usd,
+                'token_amount': amount_in_tokens,
+                'spender': spender_address,
+                'safe_wallet': self.safe_address,
+                'approval_result': approval_result
+            }
+            
+            # Add approval transaction details if available
+            if approval_result.get('safe_tx_hash'):
+                result['approval_transaction'] = {
+                    'safeTxHash': approval_result.get('safe_tx_hash'),
+                    'executed': approval_result.get('approval_executed', False),
+                    'execution_tx_hash': approval_result.get('execution_tx_hash'),
+                    'payload_file': approval_result.get('payload_file')
+                }
+                
+            # No approval transaction needed or no safe_tx_hash available
+            elif not approval_result.get('approval_needed'):
+                result['approval_transaction'] = {
+                    'message': 'No approval transaction found (likely already approved)'
+                }
+            
+            return result
+            
+        except Exception as e:
+            logger.error(f"❌ Error ensuring token approval: {e}")
+            return {
+                'status': 'error',
+                'error': str(e),
+                'token_amount_usd': token_amount_usd,
+                'timestamp': datetime.now().isoformat()
+            }
+
     def execute_safe_transaction(self, safe_tx_hash: str) -> Dict[str, Any]:
         """Execute a Safe transaction using the safe_utils module"""
         try:
@@ -873,6 +1019,440 @@ class EnhancedGMXAPI:
                 'position_id': position_id,
                 'timestamp': datetime.now().isoformat()
             }
+
+    def execute_position_with_tp_sl_sequential(
+        self, 
+        token: str, 
+        size_usd: float, 
+        leverage: int,
+        take_profit_price: float,
+        stop_loss_price: float,
+        is_long: bool = True,
+        auto_execute: bool = False,
+        **kwargs
+    ) -> Dict[str, Any]:
+        """Create a position with sequential execution: Approval → Buy → TP → SL"""
+        try:
+            if not self.initialized:
+                raise Exception("API not initialized")
+            
+            token_config = self.supported_tokens.get(token.upper())
+            if not token_config:
+                raise Exception(f"Token {token} not supported")
+            
+            # Extract additional parameters for database logging
+            signal_id = kwargs.get('signal_id')
+            username = kwargs.get('username', 'api_user')
+            original_signal = kwargs.get('original_signal', {})
+            
+            # Calculate amounts
+            collateral_amount = Decimal(str(size_usd)) / Decimal(str(leverage))
+            collateral_amount_usd = float(collateral_amount)
+            
+            logger.info(f"🎯 Starting SEQUENTIAL position creation with TP/SL for {token}")
+            logger.info(f"   Position: {'LONG' if is_long else 'SHORT'}")
+            logger.info(f"   Size: ${size_usd} USD")
+            logger.info(f"   Collateral: ${collateral_amount_usd} USDC")
+            logger.info(f"   Leverage: {leverage}x")
+            logger.info(f"   Take Profit: ${take_profit_price}")
+            logger.info(f"   Stop Loss: ${stop_loss_price}")
+            logger.info(f"   Auto-execute: {auto_execute}")
+            
+            # Check that Safe wallet has sufficient USDC
+            if not self._ensure_safe_has_funds(collateral_amount_usd):
+                raise Exception("Safe wallet has insufficient funds for trading")
+            
+            # Log position creation to database
+            position_id = None
+            if self.db_connected:
+                position_id = gmx_db.log_order_creation(
+                    safe_address=self.safe_address,
+                    token=token.upper(),
+                    order_type="tp_sl_position_sequential",
+                    size_usd=size_usd,
+                    leverage=leverage,
+                    is_long=is_long,
+                    signal_id=signal_id,
+                    username=username,
+                    market_key=token_config['market_key'],
+                    index_token=token_config['index_token'],
+                    collateral_token=token_config['collateral_token'],
+                    original_signal=original_signal,
+                    take_profit_price=take_profit_price,
+                    stop_loss_price=stop_loss_price
+                )
+            
+            sequential_results = {}
+            
+            # STEP 1: Create Buy Order (Main Position) - this will handle approvals automatically
+            logger.info("💰 STEP 1: Creating Buy order...")
+            
+            # Set auto_execute_approvals in config for approval transactions
+            original_auto_execute = getattr(self.config, 'auto_execute_approvals', False)
+            if auto_execute:
+                self.config.auto_execute_approvals = True
+            
+            try:
+                # Create the buy order with auto_execute=False to check for approvals first
+                buy_order_result = self.execute_buy_order(
+                    token=token,
+                    size_usd=size_usd,
+                    leverage=leverage,
+                    auto_execute=False,  # Don't auto-execute yet, need to handle approvals first
+                    signal_id=signal_id,
+                    username=username,
+                    original_signal=original_signal
+                )
+            finally:
+                # Always reset config to original state
+                self.config.auto_execute_approvals = original_auto_execute
+            sequential_results['buy_order'] = buy_order_result
+            
+            if buy_order_result.get('status') != 'success':
+                raise Exception(f"Buy order failed: {buy_order_result.get('error')}")
+            
+            # Check if approval transaction was created during buy order
+            logger.info("🔍 Checking if approval transaction was created during buy order...")
+            approval_executed = self.execute_pending_approval_transactions()
+            
+            if approval_executed:
+                logger.info("⏳ Waiting for approval transaction to confirm...")
+                time.sleep(15)  # Wait for blockchain confirmation
+            
+            # Now execute the buy order if auto_execute is enabled
+            buy_safe_tx_hash = None
+            if buy_order_result.get('safe', {}).get('safeTxHash'):
+                buy_safe_tx_hash = buy_order_result['safe']['safeTxHash']
+                
+                if auto_execute and buy_safe_tx_hash:
+                    logger.info("⏳ Waiting for transaction to be processed by Safe API...")
+                    time.sleep(15)  # Wait for Safe Transaction Service to process the proposal
+                    
+                    logger.info("🚀 Auto-executing Buy order...")
+                    execution_result = self.execute_safe_transaction(buy_safe_tx_hash)
+                    if execution_result.get('status') == 'success':
+                        buy_order_result['execution'] = {
+                            'status': 'success',
+                            'txHash': execution_result.get('txHash'),
+                            'message': 'Buy order executed successfully'
+                        }
+                        logger.info("✅ Buy order executed successfully")
+                    else:
+                        buy_order_result['execution'] = {
+                            'status': 'error',
+                            'error': execution_result.get('error'),
+                            'message': 'Buy order execution failed'
+                        }
+                        logger.error(f"❌ Buy order execution failed: {execution_result.get('error')}")
+            
+            # Wait for buy order to execute if auto-executed
+            if auto_execute and buy_order_result.get('execution', {}).get('status') == 'success':
+                logger.info("⏳ Waiting for buy order to execute...")
+                time.sleep(15)  # Wait for position to open
+            
+            # STEP 2: Create Take Profit Order
+            logger.info("📈 STEP 2: Creating Take Profit order...")
+            tp_order_result = self._create_take_profit_order(
+                token=token,
+                size_usd=size_usd,
+                trigger_price=take_profit_price,
+                is_long=is_long,
+                auto_execute=auto_execute,
+                position_id=position_id,
+                signal_id=signal_id,
+                username=username
+            )
+            sequential_results['take_profit_order'] = tp_order_result
+            
+            if tp_order_result.get('status') != 'success':
+                logger.warning(f"⚠️ Take Profit order failed: {tp_order_result.get('error')}")
+            
+            # STEP 3: Create Stop Loss Order
+            logger.info("📉 STEP 3: Creating Stop Loss order...")
+            sl_order_result = self._create_stop_loss_order(
+                token=token,
+                size_usd=size_usd,
+                trigger_price=stop_loss_price,
+                is_long=is_long,
+                auto_execute=auto_execute,
+                position_id=position_id,
+                signal_id=signal_id,
+                username=username
+            )
+            sequential_results['stop_loss_order'] = sl_order_result
+            
+            if sl_order_result.get('status') != 'success':
+                logger.warning(f"⚠️ Stop Loss order failed: {sl_order_result.get('error')}")
+            
+            # Compile final result
+            result = {
+                'status': 'success',
+                'message': 'Sequential position creation completed',
+                'position': {
+                    'token': token.upper(),
+                    'type': 'LONG' if is_long else 'SHORT',
+                    'size_usd': size_usd,
+                    'collateral_usd': collateral_amount_usd,
+                    'leverage': leverage,
+                    'take_profit_price': take_profit_price,
+                    'stop_loss_price': stop_loss_price
+                },
+                'sequential_results': sequential_results,
+                'safe_wallet': self.safe_address,
+                'position_id': position_id,
+                'flow_completed': True,
+                'timestamp': datetime.now().isoformat()
+            }
+            
+            # Add execution summary
+            executed_steps = 0
+            total_steps = 3
+            
+            if sequential_results['buy_order'].get('execution', {}).get('status') == 'success':
+                executed_steps += 1
+            if sequential_results['take_profit_order'].get('execution', {}).get('status') == 'success':
+                executed_steps += 1
+            if sequential_results['stop_loss_order'].get('execution', {}).get('status') == 'success':
+                executed_steps += 1
+            
+            # Also count successful buy order creation even if not auto-executed
+            if sequential_results['buy_order'].get('status') == 'success' and not sequential_results['buy_order'].get('execution'):
+                executed_steps += 1
+            
+            result['execution_summary'] = {
+                'executed_steps': executed_steps,
+                'total_steps': total_steps,
+                'success_rate': f"{executed_steps}/{total_steps}"
+            }
+            
+            logger.info(f"✅ Sequential position creation completed! ({executed_steps}/{total_steps} steps executed)")
+            
+            return result
+            
+        except Exception as e:
+            logger.error(f"❌ Error in sequential position creation: {e}")
+            
+            # Log failure to database
+            if self.db_connected and position_id:
+                transaction_tracker.update_position_status(
+                    position_id=position_id,
+                    status=PositionStatus.FAILED
+                )
+            
+            return {
+                'status': 'error',
+                'error': str(e),
+                'position_id': position_id,
+                'timestamp': datetime.now().isoformat()
+            }
+
+    def _create_take_profit_order(
+        self,
+        token: str,
+        size_usd: float,
+        trigger_price: float,
+        is_long: bool,
+        auto_execute: bool = False,
+        **kwargs
+    ) -> Dict[str, Any]:
+        """Create a Take Profit order"""
+        try:
+            if not self.initialized:
+                raise Exception("API not initialized")
+            
+            token_config = self.supported_tokens.get(token.upper())
+            if not token_config:
+                raise Exception(f"Token {token} not supported")
+            
+            # Extract additional parameters
+            signal_id = kwargs.get('signal_id')
+            username = kwargs.get('username', 'api_user')
+            position_id = kwargs.get('position_id')
+            
+            # Calculate order parameters
+            size_delta = int(Decimal(str(size_usd)) * Decimal(10**30))
+            collateral_to_withdraw = int(Decimal(str(size_usd)) * Decimal(10**6))  # Withdraw full collateral for TP
+            
+            logger.info(f"🎯 Creating Take Profit order for {token} at ${trigger_price}")
+            
+            # Create take profit order
+            order = TakeProfitOrder(
+                trigger_price=float(trigger_price),
+                config=self.config,
+                market_key=token_config['market_key'],
+                collateral_address=token_config['collateral_token'],
+                index_token_address=token_config['index_token'],
+                is_long=is_long,
+                size_delta=size_delta,
+                initial_collateral_delta_amount=collateral_to_withdraw,
+                slippage_percent=0.005,
+                swap_path=[],
+                debug_mode=False
+            )
+            
+            # Extract Safe transaction info
+            safe_info = {}
+            safe_tx_hash = None
+            
+            last_proposal = getattr(order, 'last_safe_tx_proposal', None)
+            if last_proposal and isinstance(last_proposal, dict):
+                safe_tx_hash = last_proposal.get('safeTxHash') or last_proposal.get('contractTransactionHash')
+                safe_info = {
+                    'safeTxHash': safe_tx_hash,
+                    'url': last_proposal.get('url')
+                }
+                
+                # Log Safe transaction to database
+                if self.db_connected and safe_tx_hash:
+                    gmx_db.log_safe_transaction_from_order(
+                        safe_tx_hash=safe_tx_hash,
+                        safe_address=self.safe_address,
+                        order_type=OrderType.LIMIT_DECREASE,
+                        token=token.upper(),
+                        position_id=position_id,
+                        signal_id=signal_id,
+                        username=username,
+                        market_key=token_config['market_key']
+                    )
+            
+            # Auto-execute if requested
+            if auto_execute and safe_tx_hash:
+                logger.info(f"⏳ Waiting for transaction to be processed by Safe API...")
+                time.sleep(15)  # Wait for Safe Transaction Service to process the proposal
+                
+                logger.info(f"🚀 Auto-executing Take Profit order: {safe_tx_hash}")
+                execution_result = self.execute_safe_transaction(safe_tx_hash)
+                if execution_result.get('status') == 'success':
+                    safe_info['executed'] = True
+                    safe_info['execution_tx_hash'] = execution_result.get('txHash')
+                    safe_info['execution_message'] = 'Take Profit order executed successfully'
+                else:
+                    safe_info['execution_error'] = execution_result.get('error')
+                    safe_info['execution_message'] = 'Take Profit order execution failed'
+            
+            return {
+                'status': 'success',
+                'order_type': 'take_profit',
+                'token': token,
+                'trigger_price': trigger_price,
+                'size_usd': size_usd,
+                'safe': safe_info,
+                'order': str(order),
+                'timestamp': datetime.now().isoformat()
+            }
+            
+        except Exception as e:
+            logger.error(f"❌ Error creating Take Profit order: {e}")
+            return {
+                'status': 'error',
+                'order_type': 'take_profit',
+                'error': str(e),
+                'timestamp': datetime.now().isoformat()
+            }
+
+    def _create_stop_loss_order(
+        self,
+        token: str,
+        size_usd: float,
+        trigger_price: float,
+        is_long: bool,
+        auto_execute: bool = False,
+        **kwargs
+    ) -> Dict[str, Any]:
+        """Create a Stop Loss order"""
+        try:
+            if not self.initialized:
+                raise Exception("API not initialized")
+            
+            token_config = self.supported_tokens.get(token.upper())
+            if not token_config:
+                raise Exception(f"Token {token} not supported")
+            
+            # Extract additional parameters
+            signal_id = kwargs.get('signal_id')
+            username = kwargs.get('username', 'api_user')
+            position_id = kwargs.get('position_id')
+            
+            # Calculate order parameters
+            size_delta = int(Decimal(str(size_usd)) * Decimal(10**30))
+            collateral_to_withdraw = int(Decimal(str(size_usd)) * Decimal(10**6))  # Withdraw full collateral for SL
+            
+            logger.info(f"🎯 Creating Stop Loss order for {token} at ${trigger_price}")
+            
+            # Create stop loss order
+            order = StopLossOrder(
+                trigger_price=float(trigger_price),
+                config=self.config,
+                market_key=token_config['market_key'],
+                collateral_address=token_config['collateral_token'],
+                index_token_address=token_config['index_token'],
+                is_long=is_long,
+                size_delta=size_delta,
+                initial_collateral_delta_amount=collateral_to_withdraw,
+                slippage_percent=0.005,
+                swap_path=[],
+                debug_mode=False
+            )
+            
+            # Extract Safe transaction info
+            safe_info = {}
+            safe_tx_hash = None
+            
+            last_proposal = getattr(order, 'last_safe_tx_proposal', None)
+            if last_proposal and isinstance(last_proposal, dict):
+                safe_tx_hash = last_proposal.get('safeTxHash') or last_proposal.get('contractTransactionHash')
+                safe_info = {
+                    'safeTxHash': safe_tx_hash,
+                    'url': last_proposal.get('url')
+                }
+                
+                # Log Safe transaction to database
+                if self.db_connected and safe_tx_hash:
+                    gmx_db.log_safe_transaction_from_order(
+                        safe_tx_hash=safe_tx_hash,
+                        safe_address=self.safe_address,
+                        order_type=OrderType.LIMIT_DECREASE,
+                        token=token.upper(),
+                        position_id=position_id,
+                        signal_id=signal_id,
+                        username=username,
+                        market_key=token_config['market_key']
+                    )
+            
+            # Auto-execute if requested
+            if auto_execute and safe_tx_hash:
+                logger.info(f"⏳ Waiting for transaction to be processed by Safe API...")
+                time.sleep(15)  # Wait for Safe Transaction Service to process the proposal
+                
+                logger.info(f"🚀 Auto-executing Stop Loss order: {safe_tx_hash}")
+                execution_result = self.execute_safe_transaction(safe_tx_hash)
+                if execution_result.get('status') == 'success':
+                    safe_info['executed'] = True
+                    safe_info['execution_tx_hash'] = execution_result.get('txHash')
+                    safe_info['execution_message'] = 'Stop Loss order executed successfully'
+                else:
+                    safe_info['execution_error'] = execution_result.get('error')
+                    safe_info['execution_message'] = 'Stop Loss order execution failed'
+            
+            return {
+                'status': 'success',
+                'order_type': 'stop_loss',
+                'token': token,
+                'trigger_price': trigger_price,
+                'size_usd': size_usd,
+                'safe': safe_info,
+                'order': str(order),
+                'timestamp': datetime.now().isoformat()
+            }
+            
+        except Exception as e:
+            logger.error(f"❌ Error creating Stop Loss order: {e}")
+            return {
+                'status': 'error',
+                'order_type': 'stop_loss',
+                'error': str(e),
+                'timestamp': datetime.now().isoformat()
+            }
     
     def process_signal_with_database(self, signal_data: Dict[str, Any]) -> Dict[str, Any]:
         """Process trading signal with full database integration"""
@@ -1096,7 +1676,18 @@ def sell_position():
 
 @app.route('/position/create-with-tp-sl', methods=['POST'])
 def create_position_with_tp_sl():
-    """Create a position with automatic Take Profit and Stop Loss orders from signal format"""
+    """Create a position with automatic Take Profit and Stop Loss orders from signal format
+    
+    New Sequential Flow (default):
+    1. Execute pending approval transactions (if any)
+    2. Create Buy order (handles approval automatically if needed)
+    3. Create Take Profit order
+    4. Create Stop Loss order
+    
+    Parameters:
+    - sequentialExecution: True (default) for new flow, False for old batch flow
+    - autoExecute: False (default) for manual execution, True for auto-execution
+    """
     try:
         data = request.get_json()
         
@@ -1157,6 +1748,7 @@ def create_position_with_tp_sl():
                 stop_loss_price = float(sl)
                 current_price_val = float(current_price) if current_price else None
                 tp2_val = float(tp2) if tp2 else None
+                
             except (ValueError, TypeError) as e:
                 return jsonify({
                     'status': 'error',
@@ -1275,19 +1867,36 @@ def create_position_with_tp_sl():
                 )
                 kwargs['signal_id'] = signal_id
         
-        # Check for auto_execute parameter
+        # Check for execution mode parameters
         auto_execute = data.get('autoExecute', False)
+        sequential_execution = data.get('sequentialExecution', True)  # Default to new sequential flow
         
-        result = gmx_api.execute_position_with_tp_sl(
-            token=token,
-            size_usd=size_usd,
-            leverage=leverage,
-            take_profit_price=take_profit_price,
-            stop_loss_price=stop_loss_price,
-            is_long=is_long,
-            auto_execute=auto_execute,
-            **kwargs
-        )
+        logger.info(f"🔄 Using {'sequential' if sequential_execution else 'batch'} execution mode")
+        
+        # Choose execution method based on parameter
+        if sequential_execution:
+            result = gmx_api.execute_position_with_tp_sl_sequential(
+                token=token,
+                size_usd=size_usd,
+                leverage=leverage,
+                take_profit_price=take_profit_price,
+                stop_loss_price=stop_loss_price,
+                is_long=is_long,
+                auto_execute=auto_execute,
+                **kwargs
+            )
+        else:
+            # Use original batch method for backward compatibility
+            result = gmx_api.execute_position_with_tp_sl(
+                token=token,
+                size_usd=size_usd,
+                leverage=leverage,
+                take_profit_price=take_profit_price,
+                stop_loss_price=stop_loss_price,
+                is_long=is_long,
+                auto_execute=auto_execute,
+                **kwargs
+            )
         
         # Add signal-specific metadata if it's a signal format
         if 'Signal Message' in data:
@@ -1318,6 +1927,217 @@ def create_position_with_tp_sl():
         
     except Exception as e:
         logger.error(f"❌ Error creating position with TP/SL: {e}")
+        return jsonify({
+            'status': 'error',
+            'error': str(e),
+            'timestamp': datetime.now().isoformat()
+        }), 500
+
+@app.route('/tp-order', methods=['POST'])
+def create_tp_order():
+    """Create a Take Profit order using signal format similar to /position/create-with-tp-sl"""
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({
+                'status': 'error',
+                'error': 'No data provided'
+            }), 400
+        
+        # Check if this is the signal format or direct API format
+        if 'Signal Message' in data and 'Token Mentioned' in data:
+            # Signal format - extract parameters
+            signal_message = data.get('Signal Message', '').lower()
+            token = data.get('Token Mentioned', '').upper()
+            tp1 = data.get('TP1')
+            tp2 = data.get('TP2')  # Optional, will use TP1 for TP order
+            sl = data.get('SL')
+            current_price = data.get('Current Price')
+            max_exit_time = data.get('Max Exit Time')
+            username = data.get('username', 'api_user')
+            safe_address = data.get('safeAddress')
+            auto_execute = str(data.get('autoExecute', False)).lower() == 'true'
+            
+            # Validate safe_address is present
+            if not safe_address:
+                return jsonify({
+                    'status': 'error',
+                    'error': 'safeAddress is required in signal data'
+                }), 400
+            
+            # Validate required signal fields
+            if not signal_message:
+                return jsonify({
+                    'status': 'error',
+                    'error': 'Signal Message is required'
+                }), 400
+                
+            if not token:
+                return jsonify({
+                    'status': 'error',
+                    'error': 'Token Mentioned is required'
+                }), 400
+                
+            if tp1 is None:
+                return jsonify({
+                    'status': 'error',
+                    'error': 'TP1 is required for Take Profit order'
+                }), 400
+            
+            # Convert to float and validate
+            try:
+                trigger_price = float(tp1)
+                current_price_val = float(current_price) if current_price else None
+                tp2_val = float(tp2) if tp2 else None
+                sl_val = float(sl) if sl else None
+                
+            except (ValueError, TypeError) as e:
+                return jsonify({
+                    'status': 'error',
+                    'error': f'Invalid numeric values in signal: {str(e)}'
+                }), 400
+            
+            # Determine position direction
+            if signal_message in ['buy', 'long']:
+                is_long = True
+            elif signal_message in ['sell', 'short']:
+                is_long = False
+            else:
+                return jsonify({
+                    'status': 'error',
+                    'error': f'Invalid Signal Message: {signal_message}. Must be buy, long, sell, or short'
+                }), 400
+            
+            # Default trading parameters for signals (same as normal orders)
+            size_usd = 10.00  # Default size for signals (matches normal orders)
+            
+            # Log signal details
+            logger.info(f"📡 Processing signal format for Take Profit order:")
+            logger.info(f"   Signal Message: {signal_message.upper()}")
+            logger.info(f"   Token: {token}")
+            logger.info(f"   Current Price: ${current_price_val}")
+            logger.info(f"   TP1: ${trigger_price}")
+            if tp2_val:
+                logger.info(f"   TP2: ${tp2_val} (noted but using TP1 as primary)")
+            if sl_val:
+                logger.info(f"   SL: ${sl_val} (noted but not used for TP order)")
+            logger.info(f"   Username: {username}")
+            logger.info(f"   Safe Address: {safe_address}")
+            if max_exit_time:
+                logger.info(f"   Max Exit Time: {max_exit_time}")
+            
+            # Validate TP price makes sense for position direction
+            if current_price_val:
+                if is_long and trigger_price <= current_price_val:
+                    logger.warning(f"⚠️ TP1 ({trigger_price}) should be above current price ({current_price_val}) for long positions")
+                elif not is_long and trigger_price >= current_price_val:
+                    logger.warning(f"⚠️ TP1 ({trigger_price}) should be below current price ({current_price_val}) for short positions")
+        
+        else:
+            # Direct API format (backward compatibility)
+            token = data.get('token', '').upper()
+            trigger_price = data.get('trigger_price')
+            is_long = data.get('is_long', True)
+            size_usd = data.get('size_usd')
+            safe_address = data.get('safeAddress')
+            auto_execute = data.get('autoExecute', False)
+            username = data.get('username', 'api_user')
+            
+            # Validate required parameters
+            if not token:
+                return jsonify({
+                    'status': 'error',
+                    'error': 'token is required'
+                }), 400
+                
+            if trigger_price is None:
+                return jsonify({
+                    'status': 'error',
+                    'error': 'trigger_price is required'
+                }), 400
+                
+            if size_usd is None:
+                return jsonify({
+                    'status': 'error',
+                    'error': 'size_usd is required'
+                }), 400
+            
+            # Convert and validate numeric values
+            try:
+                trigger_price = float(trigger_price)
+                size_usd = float(size_usd)
+            except (ValueError, TypeError) as e:
+                return jsonify({
+                    'status': 'error',
+                    'error': f'Invalid numeric values: {str(e)}'
+                }), 400
+            
+            logger.info(f"🎯 Creating Take Profit order (direct format):")
+            logger.info(f"   Token: {token}")
+            logger.info(f"   Trigger Price: ${trigger_price}")
+            logger.info(f"   Size: ${size_usd}")
+            logger.info(f"   Position: {'LONG' if is_long else 'SHORT'}")
+        
+        # Initialize API with safe_address if provided
+        if safe_address:
+            if not gmx_api.initialized or gmx_api.safe_address != safe_address:
+                logger.info(f"🔄 Re-initializing API with Safe address from request: {safe_address}")
+                gmx_api.initialize(safe_address=safe_address)
+        
+        # Prepare kwargs for database tracking
+        kwargs = {
+            'username': username,
+            'original_signal': data
+        }
+        
+        # Add signal_id if this is a signal format
+        signal_id = ""
+        if 'Signal Message' in data and gmx_api.db_connected:
+            signal_id = gmx_db.log_signal_processing(
+                signal_data=data,
+                username=username,
+                api_endpoint='/tp-order'
+            )
+            kwargs['signal_id'] = signal_id
+        
+        # Create the take profit order
+        result = gmx_api._create_take_profit_order(
+            token=token,
+            size_usd=size_usd,
+            trigger_price=trigger_price,
+            is_long=is_long,
+            auto_execute=auto_execute,
+            **kwargs
+        )
+        
+        # Add signal-specific metadata if it's a signal format
+        if 'Signal Message' in data:
+            result.update({
+                'signal_id': signal_id,
+                'signal_type': signal_message,
+                'signal_details': {
+                    'current_price': current_price_val,
+                    'take_profit_tp1': trigger_price,
+                    'take_profit_tp2': tp2_val,
+                    'stop_loss': sl_val,
+                    'max_exit_time': max_exit_time,
+                    'safe_address': safe_address
+                },
+                'original_signal': data
+            })
+        
+        return jsonify(result)
+        
+    except ValueError as e:
+        logger.error(f"❌ Validation error: {e}")
+        return jsonify({
+            'status': 'error',
+            'error': f'Invalid input: {str(e)}',
+            'timestamp': datetime.now().isoformat()
+        }), 400
+        
+    except Exception as e:
+        logger.error(f"❌ Error creating Take Profit order: {e}")
         return jsonify({
             'status': 'error',
             'error': str(e),

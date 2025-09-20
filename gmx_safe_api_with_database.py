@@ -24,7 +24,7 @@ from gmx_python_sdk.scripts.v2.order.create_increase_order import IncreaseOrder
 from gmx_python_sdk.scripts.v2.order.create_decrease_order import DecreaseOrder
 from gmx_python_sdk.scripts.v2.order.create_position_with_tp_sl import PositionWithTPSL
 from gmx_python_sdk.scripts.v2.order.create_take_profit_order import TakeProfitOrder
-from gmx_python_sdk.scripts.v2.order.create_stop_loss_order import StopLossOrdere
+from gmx_python_sdk.scripts.v2.order.create_stop_loss_order import StopLossOrder
 from gmx_python_sdk.scripts.v2.order.order_argument_parser import OrderArgumentParser
 from gmx_python_sdk.scripts.v2.get.get_open_positions import GetOpenPositions
 

@@ -1,6 +1,6 @@
 from eth_abi import encode
 from web3 import Web3
-import yaml
+# import yaml
 import logging
 import os
 import json

@@ -1,6 +1,6 @@
 from eth_abi import encode
 from web3 import Web3
-# import yaml
+import yaml
 import logging
 import os
 import json
@@ -54,7 +54,7 @@ contract_map = {
         },
         "exchangerouter":
         {
-            "contract_address": "0x900173A66dbD345006C51fA35fA3aB760FcD843b",
+            "contract_address": "0x87d66368cD08a7Ca42252f5ab44B2fb6d1Fb8d15",
             "abi_path": "contracts/arbitrum/exchangerouter.json"
         },
         "depositvault":
@@ -72,19 +72,19 @@ contract_map = {
             "contract_address": "0x31eF83a530Fde1B38EE9A18093A333D8Bbbc40D5",
             "abi_path": "contracts/arbitrum/ordervault.json"
         },
-        "syntheticsreader":
+        "reader":
         {
-            "contract_address": "0x5Ca84c34a381434786738735265b9f3FD814b824",
+            "contract_address": "0x65A6CC451BAfF7e7B4FDAb4157763aB4b6b44D0E",
             "abi_path": "contracts/arbitrum/syntheticsreader.json"
         },
-        "syntheticsrouter":
+        "router":
         {
             "contract_address": "0x7452c558d45f8afC8c83dAe62C3f8A5BE19c71f6",
             "abi_path": "contracts/arbitrum/syntheticsrouter.json"
         },
         "glvreader":
         {
-            "contract_address": "0xd4f522c4339Ae0A90a156bd716715547e44Bed65",
+            "contract_address": "0xb51e34dc3A7c80E4ABbC3800aD0e487b7b878339",
             "abi_path": "contracts/arbitrum/glvreader.json"
         }
     },
@@ -351,7 +351,7 @@ def get_reader_contract(config):
     web3_obj = create_connection(config)
     return get_contract_object(
         web3_obj,
-        'syntheticsreader',
+        'reader',
         config.chain
     )
 
@@ -515,7 +515,8 @@ def get_execution_price_and_price_impact(
         params['position_size_in_usd'],
         params['position_size_in_tokens'],
         params['size_delta'],
-        params['is_long'],
+        0,
+        params['is_long']
     ).call()
 
     return {'execution_price': output[2] / 10**(PRECISION - decimals),

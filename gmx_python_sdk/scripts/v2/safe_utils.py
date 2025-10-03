@@ -138,32 +138,26 @@ def propose_safe_transaction_sdk(
         # Try to post to Safe Transaction Service using the working approach
         try:
             if safe_api_url:
-                # Import the correct Safe service client like the working implementation
-                try:
-                    from safe_eth.safe.api.transaction_service_api import TransactionServiceApi as SafeServiceClient
-                except ImportError:
-                    try:
-                        from safe_eth.safe.services.safe_service_client import SafeServiceClient
-                    except ImportError:
-                        try:
-                            from safe_eth.safe.api.clients import SafeServiceClient
-                        except ImportError:
-                            from safe_eth.safe import SafeServiceClient
-                
+                # Use the supported TransactionServiceApi (available in your environment)
+                from safe_eth.safe.api.transaction_service_api import TransactionServiceApi
                 from safe_eth.eth.ethereum_network import EthereumNetwork
                 
                 # Get API key from environment if available
                 import os
                 safe_api_key = os.getenv('SAFE_TRANSACTION_SERVICE_API_KEY')
                 
-                # Initialize service client with API key (like working implementation)
+                # Initialize TransactionServiceApi with optional API key
                 if safe_api_key:
-                    service_client = SafeServiceClient(
-                        EthereumNetwork.ARBITRUM_ONE, 
-                        api_key=safe_api_key
+                    service_client = TransactionServiceApi(
+                        EthereumNetwork.ARBITRUM_ONE,
+                        api_key=safe_api_key,
+                        ethereum_client=ethereum_client
                     )
                 else:
-                    service_client = SafeServiceClient(EthereumNetwork.ARBITRUM_ONE)
+                    service_client = TransactionServiceApi(
+                        EthereumNetwork.ARBITRUM_ONE,
+                        ethereum_client=ethereum_client
+                    )
                 
                 # Post transaction using the working method
                 result = service_client.post_transaction(safe_tx)

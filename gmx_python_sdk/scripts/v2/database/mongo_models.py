@@ -26,6 +26,7 @@ class PositionStatus(Enum):
     CLOSED = "closed"
     PARTIALLY_CLOSED = "partially_closed"
     LIQUIDATED = "liquidated"
+    FAILED = "failed"
 
 class OrderType(Enum):
     MARKET_INCREASE = "market_increase"

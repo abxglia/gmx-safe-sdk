@@ -105,8 +105,6 @@ class TakeProfitOrder(Order):
             float(prices[self.index_token_address]['minPriceFull'])
         ])
 
-        # Convert trigger price to the correct format (trigger prices use 22 decimals)
-        # Use Decimal for high-precision arithmetic to avoid floating point errors
         from decimal import Decimal
         TRIGGER_PRICE_DECIMALS = 22  # Trigger prices use 22 decimals
         trigger_price_decimal = Decimal(str(self.trigger_price))
@@ -162,7 +160,7 @@ class TakeProfitOrder(Order):
         arguments = (
             (
                 user_wallet_address,           # receiver
-                cancellation_receiver,         # cancellationReceiver  
+                cancellation_receiver,         # cancellationReceiver
                 eth_zero_address,             # callbackContract
                 ui_ref_address,               # uiFeeReceiver
                 gmx_market_address,           # market
@@ -170,13 +168,13 @@ class TakeProfitOrder(Order):
                 self.swap_path                # swapPath
             ),
             (
-                self.size_delta,                    # sizeDeltaUsd (negative for decrease)
-                self.initial_collateral_delta_amount, # initialCollateralDeltaAmount
-                trigger_price_with_decimals,        # triggerPrice - THIS IS THE KEY CHANGE
-                acceptable_price,                   # acceptablePrice
-                execution_fee,                      # executionFee
-                callback_gas_limit,                 # callbackGasLimit
-                int(min_output_amount),            # minOutputAmount
+                abs(int(self.size_delta)),                    # sizeDeltaUsd (negative for decrease)
+                abs(int(self.initial_collateral_delta_amount)), # initialCollateralDeltaAmount
+                abs(int(trigger_price_with_decimals)),        # triggerPrice - THIS IS THE KEY CHANGE
+                abs(int(acceptable_price)),                   # acceptablePrice
+                abs(int(execution_fee)),                      # executionFee
+                abs(int(callback_gas_limit)),                 # callbackGasLimit
+                abs(int(min_output_amount)),            # minOutputAmount
                 0                                  # validFromTime
             ),
             order_type,                      # orderType (limit_decrease = 5)
@@ -184,7 +182,8 @@ class TakeProfitOrder(Order):
             self.is_long,                   # isLong
             should_unwrap_native_token,     # shouldUnwrapNativeToken
             auto_cancel,                    # autoCancel
-            referral_code                   # referralCode
+            referral_code,                  # referralCode
+            []                              # validFromTimes (empty bytes32 array)
         )
 
         # Build multicall transaction

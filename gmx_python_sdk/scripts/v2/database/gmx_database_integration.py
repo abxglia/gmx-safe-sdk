@@ -38,8 +38,8 @@ class GMXDatabaseIntegration:
     ) -> Optional[str]:
         """Log creation of a new GMX order/position"""
         try:
-            # Generate position ID
-            position_id = f"{safe_address[:8]}_{token}_{'LONG' if is_long else 'SHORT'}_{int(time.time())}"
+            # Generate position ID with microsecond precision to avoid duplicates
+            position_id = f"{safe_address[:8]}_{token}_{'LONG' if is_long else 'SHORT'}_{int(time.time() * 1000000)}"
             
             # Extract market_key from kwargs to avoid duplicate parameter
             market_key = kwargs.pop('market_key', '')
@@ -76,7 +76,7 @@ class GMXDatabaseIntegration:
     def log_safe_transaction_from_order(
         safe_tx_hash: str,
         safe_address: str,
-        order_type: OrderType,
+        order_type: Any,
         token: str,
         position_id: Optional[str] = None,
         signal_id: Optional[str] = None,
@@ -85,6 +85,13 @@ class GMXDatabaseIntegration:
     ) -> bool:
         """Log Safe transaction created from GMX order"""
         try:
+            # Normalize order_type to Enum if provided as string
+            try:
+                if isinstance(order_type, str):
+                    order_type = OrderType(order_type)
+            except Exception:
+                logger.warning(f"Unknown order_type value: {order_type} - storing as None")
+                order_type = None
             return transaction_tracker.log_safe_transaction(
                 safe_tx_hash=safe_tx_hash,
                 safe_address=safe_address,

@@ -72,7 +72,7 @@ class Order:
         """
         Check for Approval
         """
-        spender = contract_map[self.config.chain]["syntheticsrouter"]['contract_address']
+        spender = contract_map[self.config.chain]["router"]['contract_address']
 
         approval_result = check_if_approved(
             config=self.config,
@@ -92,6 +92,8 @@ class Order:
         """
         Submit Transaction
         """
+        self.log.info("🚀 _submit_transaction called")
+        self.log.info(f"🔍 use_safe_transactions = {getattr(self.config, 'use_safe_transactions', 'NOT SET')}")
         self.log.info("Building transaction...")
         try:
             wallet_address = Web3.to_checksum_address(user_wallet_address)
@@ -120,7 +122,11 @@ class Order:
         )
 
         # If Safe mode is enabled, do not send from EOA. Produce a Safe tx payload instead.
-        if getattr(self.config, 'use_safe_transactions', False):
+        use_safe = getattr(self.config, 'use_safe_transactions', False)
+        self.log.info(f"🔍 _submit_transaction check: use_safe_transactions = {use_safe}")
+
+        if use_safe:
+            self.log.info("✅ Safe mode detected - will propose to Safe instead of executing")
             try:
                 to_address = self._exchange_router_contract_obj.address
             except AttributeError:
@@ -342,15 +348,21 @@ class Order:
             gmx_market_address = Web3.toChecksumAddress(self.market_key)
 
         # parameters using to calculate execution price
+        # Format: ((index_token_min, index_token_max), (long_token_min, long_token_max), (short_token_min, short_token_max))
+        # For simple cases, we only need index token prices and can use zeros for long/short token prices
         execution_price_parameters = {
             'data_store_address': (
                 contract_map[self.config.chain]["datastore"]['contract_address']
             ),
             'market_key': self.market_key,
-            'index_token_price': [
-                int(prices[self.index_token_address]['maxPriceFull']),
-                int(prices[self.index_token_address]['minPriceFull'])
-            ],
+            'index_token_price': (
+                (
+                    int(prices[self.index_token_address]['minPriceFull']),
+                    int(prices[self.index_token_address]['maxPriceFull'])
+                ),
+                (0, 0),  # long_token_prices (not needed for basic execution price calculation)
+                (0, 0)   # short_token_prices (not needed for basic execution price calculation)
+            ),
             'position_size_in_usd': 0,
             'position_size_in_tokens': 0,
             'size_delta': size_delta_price_price_impact,
@@ -441,13 +453,13 @@ class Order:
                 self.swap_path
             ),
             (
-                self.size_delta,
-                self.initial_collateral_delta_amount,
-                mark_price,
-                acceptable_price,
-                execution_fee,
-                callback_gas_limit,
-                int(min_output_amount),
+                abs(int(self.size_delta)),
+                abs(int(self.initial_collateral_delta_amount)),
+                abs(int(mark_price)),
+                abs(int(acceptable_price)),
+                abs(int(execution_fee)),
+                abs(int(callback_gas_limit)),
+                abs(int(min_output_amount)),
                 0
             ),
             order_type,
@@ -455,7 +467,8 @@ class Order:
             self.is_long,
             should_unwrap_native_token,
             auto_cancel,
-            referral_code
+            referral_code,
+            []
         )
 
         # If the collateral is not native token (ie ETH/Arbitrum or AVAX/AVAX)
@@ -486,6 +499,9 @@ class Order:
                 HexBytes(self._send_wnt(value_amount)),
                 HexBytes(self._create_order(arguments))
             ]
+
+        self.log.info("🎯 About to call _submit_transaction")
+        self.log.info(f"🔍 Final check - use_safe_transactions: {getattr(self.config, 'use_safe_transactions', 'NOT SET')}")
 
         self._submit_transaction(
             user_wallet_address, value_amount, multicall_args, self._gas_limits

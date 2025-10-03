@@ -6,3 +6,4 @@ safe-cli
 pymongo
 pydantic
 pandas
+pyyaml

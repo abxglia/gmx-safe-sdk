@@ -97,10 +97,20 @@ class TransactionTracker:
             if status:
                 update_data['status'] = status.value
             
-            # Add any additional fields to update
+            # Add any additional fields to update, normalizing Enums to strings
             for key, value in kwargs.items():
                 if hasattr(SafeTransactionDocument, key) and value is not None:
-                    update_data[key] = value
+                    if key == 'order_type':
+                        try:
+                            from .mongo_models import OrderType as _OrderType
+                            if isinstance(value, _OrderType):
+                                update_data[key] = value.value
+                            else:
+                                update_data[key] = value
+                        except Exception:
+                            update_data[key] = value
+                    else:
+                        update_data[key] = value
             
             collection = mongo_manager.get_collection('safe_transactions')
             

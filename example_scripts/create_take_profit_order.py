@@ -56,7 +56,8 @@ print(f"  Trigger Price: ${take_profit_price}")
 print(f"  Position: {'LONG' if parameters['is_long'] else 'SHORT'}")
 print(f"  Size to close: ${parameters['size_delta_usd']}")
 
-# Create the take profit order
+# Option 1: Create the take profit order directly with GMX SDK (original method)
+print("\n=== Option 1: Direct GMX SDK Usage ===")
 tp_order = TakeProfitOrder(
     trigger_price=take_profit_price,
     config=arbitrum_config_object,
@@ -74,3 +75,46 @@ tp_order = TakeProfitOrder(
 
 print("✅ Take Profit order created successfully!")
 print("📈 The order will execute automatically when ETH price reaches the trigger level")
+
+# Option 2: Use Enhanced GMX API with auto-execution (NEW METHOD)
+print("\n=== Option 2: Enhanced GMX API with Auto-Execution ===")
+print("To use auto-execution with Safe wallet integration:")
+
+example_code = '''
+from services.enhanced_gmx_api import EnhancedGMXAPI
+
+# Initialize the Enhanced GMX API
+api = EnhancedGMXAPI()
+api.initialize(safe_address="your_safe_address_here")
+
+# Create and auto-execute take profit order
+result = api.execute_take_profit_order(
+    token="ETH",
+    size_usd=10.0,                  # Size to close in USD
+    trigger_price=3200.0,           # Trigger price in USD
+    is_long=True,                   # True for long positions
+    auto_execute=True,              # Enable auto-execution
+    signal_id="optional_signal_id",
+    username="your_username"
+)
+
+# Check result
+if result['status'] == 'success':
+    print("✅ Take Profit order created and executed!")
+    if result.get('safe', {}).get('executed'):
+        print("🎯 Order executed automatically!")
+        print(f"Execution TX: {result['safe']['execution_tx_hash']}")
+    else:
+        print("📋 Order created, awaiting execution...")
+        print(f"Safe TX Hash: {result['safe']['safeTxHash']}")
+else:
+    print(f"❌ Error: {result['error']}")
+'''
+
+print(example_code)
+print("\n🚀 The Enhanced API provides:")
+print("  • Automatic Safe wallet integration")
+print("  • Database tracking")
+print("  • Auto-execution of Safe transactions")
+print("  • Error handling and recovery")
+print("  • Position management")

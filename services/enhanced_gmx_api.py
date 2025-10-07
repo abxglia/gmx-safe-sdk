@@ -784,8 +784,18 @@ class EnhancedGMXAPI:
             signal_id = kwargs.get('signal_id')
             username = kwargs.get('username', 'api_user')
             position_id = kwargs.get('position_id')
+            
+            # Configure Safe transactions similar to buy order
+            original_auto_execute = getattr(self.config, 'auto_execute_approvals', False)
+            if auto_execute:
+                self.config.auto_execute_approvals = True
+
+            self.config.use_safe_transactions = True
+            self.config.safe_address = self.safe_address
+            
             size_delta = int(Decimal(str(size_usd)) * Decimal(10**30))
             collateral_to_withdraw = int(Decimal(str(size_usd)) * Decimal(10**6))
+            
             order = TakeProfitOrder(
                 trigger_price=float(trigger_price),
                 config=self.config,
@@ -829,6 +839,10 @@ class EnhancedGMXAPI:
                 else:
                     safe_info['execution_error'] = execution_result.get('error')
                     safe_info['execution_message'] = 'Take Profit order execution failed'
+            
+            # Restore original auto_execute configuration
+            self.config.auto_execute_approvals = original_auto_execute
+            
             return {
                 'status': 'success',
                 'order_type': 'take_profit',
@@ -840,6 +854,9 @@ class EnhancedGMXAPI:
                 'timestamp': datetime.now().isoformat()
             }
         except Exception as e:
+            # Restore original auto_execute configuration on error
+            if 'original_auto_execute' in locals():
+                self.config.auto_execute_approvals = original_auto_execute
             return {
                 'status': 'error',
                 'order_type': 'take_profit',
@@ -865,8 +882,18 @@ class EnhancedGMXAPI:
             signal_id = kwargs.get('signal_id')
             username = kwargs.get('username', 'api_user')
             position_id = kwargs.get('position_id')
+            
+            # Configure Safe transactions similar to buy order
+            original_auto_execute = getattr(self.config, 'auto_execute_approvals', False)
+            if auto_execute:
+                self.config.auto_execute_approvals = True
+
+            self.config.use_safe_transactions = True
+            self.config.safe_address = self.safe_address
+            
             size_delta = int(Decimal(str(size_usd)) * Decimal(10**30))
             collateral_to_withdraw = int(Decimal(str(size_usd)) * Decimal(10**6))
+            
             order = StopLossOrder(
                 trigger_price=float(trigger_price),
                 config=self.config,
@@ -910,6 +937,10 @@ class EnhancedGMXAPI:
                 else:
                     safe_info['execution_error'] = execution_result.get('error')
                     safe_info['execution_message'] = 'Stop Loss order execution failed'
+            
+            # Restore original auto_execute configuration
+            self.config.auto_execute_approvals = original_auto_execute
+            
             return {
                 'status': 'success',
                 'order_type': 'stop_loss',
@@ -921,10 +952,171 @@ class EnhancedGMXAPI:
                 'timestamp': datetime.now().isoformat()
             }
         except Exception as e:
+            # Restore original auto_execute configuration on error
+            if 'original_auto_execute' in locals():
+                self.config.auto_execute_approvals = original_auto_execute
             return {
                 'status': 'error',
                 'order_type': 'stop_loss',
                 'error': str(e),
+                'timestamp': datetime.now().isoformat()
+            }
+
+    def execute_take_profit_order(
+        self,
+        token: str,
+        size_usd: float,
+        trigger_price: float,
+        is_long: bool = True,
+        auto_execute: bool = False,
+        **kwargs
+    ) -> Dict[str, Any]:
+        """Execute a take profit order with database tracking and optional auto-execution"""
+        try:
+            if not self.initialized:
+                raise Exception("API not initialized")
+
+            token_config = self.supported_tokens.get(token.upper())
+            if not token_config:
+                raise Exception(f"Token {token} not supported")
+
+            signal_id = kwargs.get('signal_id')
+            username = kwargs.get('username', 'api_user')
+            position_id = kwargs.get('position_id')
+
+            # Log order creation in database if connected
+            if self.db_connected and not position_id:
+                position_id = gmx_db.log_order_creation(
+                    safe_address=self.safe_address,
+                    token=token.upper(),
+                    order_type="take_profit",
+                    size_usd=size_usd,
+                    leverage=1,  # TP orders don't have leverage
+                    is_long=is_long,
+                    signal_id=signal_id,
+                    username=username,
+                    market_key=token_config['market_key'],
+                    index_token=token_config['index_token'],
+                    collateral_token=token_config['collateral_token'],
+                    original_signal=kwargs.get('original_signal', {}),
+                    take_profit_price=trigger_price
+                )
+
+            # Create the take profit order using the private method
+            tp_result = self._create_take_profit_order(
+                token=token,
+                size_usd=size_usd,
+                trigger_price=trigger_price,
+                is_long=is_long,
+                auto_execute=auto_execute,
+                signal_id=signal_id,
+                username=username,
+                position_id=position_id
+            )
+
+            # Add position_id to result
+            tp_result['position_id'] = position_id
+
+            # Update database if connected
+            if self.db_connected and position_id and tp_result.get('safe', {}).get('safeTxHash'):
+                gmx_db.update_position_from_execution(
+                    position_id=position_id,
+                    execution_result=tp_result,
+                    safe_tx_hash=tp_result['safe']['safeTxHash']
+                )
+
+            return tp_result
+
+        except Exception as e:
+            if self.db_connected and 'position_id' in locals() and position_id:
+                transaction_tracker.update_position_status(
+                    position_id=position_id,
+                    status=PositionStatus.FAILED
+                )
+            return {
+                'status': 'error',
+                'error': str(e),
+                'order_type': 'take_profit',
+                'position_id': locals().get('position_id'),
+                'timestamp': datetime.now().isoformat()
+            }
+
+    def execute_stop_loss_order(
+        self,
+        token: str,
+        size_usd: float,
+        trigger_price: float,
+        is_long: bool = True,
+        auto_execute: bool = False,
+        **kwargs
+    ) -> Dict[str, Any]:
+        """Execute a stop loss order with database tracking and optional auto-execution"""
+        try:
+            if not self.initialized:
+                raise Exception("API not initialized")
+
+            token_config = self.supported_tokens.get(token.upper())
+            if not token_config:
+                raise Exception(f"Token {token} not supported")
+
+            signal_id = kwargs.get('signal_id')
+            username = kwargs.get('username', 'api_user')
+            position_id = kwargs.get('position_id')
+
+            # Log order creation in database if connected
+            if self.db_connected and not position_id:
+                position_id = gmx_db.log_order_creation(
+                    safe_address=self.safe_address,
+                    token=token.upper(),
+                    order_type="stop_loss",
+                    size_usd=size_usd,
+                    leverage=1,  # SL orders don't have leverage
+                    is_long=is_long,
+                    signal_id=signal_id,
+                    username=username,
+                    market_key=token_config['market_key'],
+                    index_token=token_config['index_token'],
+                    collateral_token=token_config['collateral_token'],
+                    original_signal=kwargs.get('original_signal', {}),
+                    stop_loss_price=trigger_price
+                )
+
+            # Create the stop loss order using the private method
+            sl_result = self._create_stop_loss_order(
+                token=token,
+                size_usd=size_usd,
+                trigger_price=trigger_price,
+                is_long=is_long,
+                auto_execute=auto_execute,
+                signal_id=signal_id,
+                username=username,
+                position_id=position_id
+            )
+
+            # Add position_id to result
+            sl_result['position_id'] = position_id
+
+            # Update database if connected
+            if self.db_connected and position_id and sl_result.get('safe', {}).get('safeTxHash'):
+                gmx_db.update_position_from_execution(
+                    position_id=position_id,
+                    execution_result=sl_result,
+                    safe_tx_hash=sl_result['safe']['safeTxHash']
+                )
+
+            return sl_result
+
+        except Exception as e:
+            if self.db_connected and 'position_id' in locals() and position_id:
+                transaction_tracker.update_position_status(
+                    position_id=position_id,
+                    status=PositionStatus.FAILED
+                )
+            return {
+                'status': 'error',
+                'error': str(e),
+                'order_type': 'stop_loss',
+                'position_id': locals().get('position_id'),
                 'timestamp': datetime.now().isoformat()
             }
 

@@ -105,13 +105,25 @@ class StopLossOrder(Order):
             float(prices[self.index_token_address]['minPriceFull'])
         ])
 
-        # Convert trigger price to the correct format (trigger prices use 22 decimals)
-        # Use Decimal for high-precision arithmetic to avoid floating point errors
+        # Convert trigger price to the correct format using GMX V2 formula
+        # GMX V2 price formula: (actual_price × 10^30) / (10^token_decimals)
+        # Therefore: trigger_price_decimals = 30 - token_decimals
         from decimal import Decimal
-        TRIGGER_PRICE_DECIMALS = 22  # Trigger prices use 22 decimals
+        token_decimals = decimals
+        TRIGGER_PRICE_DECIMALS = 30 - token_decimals
+
         trigger_price_decimal = Decimal(str(self.trigger_price))
         precision_multiplier = Decimal(10) ** TRIGGER_PRICE_DECIMALS
         trigger_price_with_decimals = int(trigger_price_decimal * precision_multiplier)
+
+        # Debug output to verify formatting
+        print(f"🔍 STOP LOSS TRIGGER PRICE DEBUG:")
+        print(f"   Token decimals: {token_decimals}")
+        print(f"   Input price: ${self.trigger_price}")
+        print(f"   GMX precision (30 - {token_decimals}): {TRIGGER_PRICE_DECIMALS} decimals")
+        print(f"   Formatted value: {trigger_price_with_decimals}")
+        print(f"   Digit length: {len(str(trigger_price_with_decimals))}")
+        print(f"   Formula: {self.trigger_price} × 10^{TRIGGER_PRICE_DECIMALS} = {trigger_price_with_decimals}")
         
         # Validate trigger price makes sense for stop loss
         current_price_usd = current_price * 10 ** (decimals - PRECISION)

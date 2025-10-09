@@ -106,18 +106,23 @@ class TakeProfitOrder(Order):
         ])
 
         from decimal import Decimal
-        TRIGGER_PRICE_DECIMALS = 22  # Trigger prices use 22 decimals
+        # GMX V2 price formula: (actual_price × 10^30) / (10^token_decimals)
+        # Therefore: trigger_price_decimals = 30 - token_decimals
+        token_decimals = decimals
+        TRIGGER_PRICE_DECIMALS = 30 - token_decimals
+
         trigger_price_decimal = Decimal(str(self.trigger_price))
         precision_multiplier = Decimal(10) ** TRIGGER_PRICE_DECIMALS
         trigger_price_with_decimals = int(trigger_price_decimal * precision_multiplier)
-        
+
         # Debug output to verify formatting
         print(f"🔍 TRIGGER PRICE DEBUG:")
-        print(f"   Input: {self.trigger_price}")
-        print(f"   Decimals used: {TRIGGER_PRICE_DECIMALS}")
-        print(f"   Formatted: {trigger_price_with_decimals}")
-        print(f"   Length: {len(str(trigger_price_with_decimals))} digits")
-        print(f"   Expected: {int(Decimal('114000') * (Decimal(10) ** 22))} for $114,000")
+        print(f"   Token decimals: {token_decimals}")
+        print(f"   Input price: ${self.trigger_price}")
+        print(f"   GMX precision (30 - {token_decimals}): {TRIGGER_PRICE_DECIMALS} decimals")
+        print(f"   Formatted value: {trigger_price_with_decimals}")
+        print(f"   Digit length: {len(str(trigger_price_with_decimals))}")
+        print(f"   Formula: {self.trigger_price} × 10^{TRIGGER_PRICE_DECIMALS} = {trigger_price_with_decimals}")
         
         # Validate trigger price makes sense for take profit
         current_price_usd = current_price * 10 ** (decimals - PRECISION)

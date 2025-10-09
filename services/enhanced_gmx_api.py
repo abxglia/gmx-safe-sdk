@@ -285,7 +285,9 @@ class EnhancedGMXAPI:
             }
 
             if auto_execute and safe_tx_hash:
+                logger.info("⏳ Waiting for transaction to be processed by Safe API...")
                 time.sleep(15)
+                logger.info("🚀 Auto-executing buy order transaction...")
                 execution_result = self.execute_safe_transaction(safe_tx_hash)
                 if execution_result.get('status') == 'success':
                     result['execution'] = {
@@ -293,6 +295,7 @@ class EnhancedGMXAPI:
                         'txHash': execution_result.get('txHash'),
                         'message': 'Transaction executed successfully'
                     }
+                    logger.info(f"✅ Buy order automatically executed! TX: {execution_result.get('txHash')}")
                     safe_info['executed'] = True
                     safe_info['execution_tx_hash'] = execution_result.get('txHash')
                 else:
@@ -301,6 +304,7 @@ class EnhancedGMXAPI:
                         'error': execution_result.get('error'),
                         'message': 'Auto-execution failed, transaction remains pending'
                     }
+                    logger.warning(f"⚠️ Buy order auto-execution failed: {execution_result.get('error')}")
 
             if self.db_connected and position_id:
                 gmx_db.update_position_from_execution(
@@ -387,15 +391,19 @@ class EnhancedGMXAPI:
                     )
 
             if auto_execute and safe_tx_hash:
+                logger.info("⏳ Waiting for transaction to be processed by Safe API...")
                 time.sleep(15)
+                logger.info("🚀 Auto-executing sell/close transaction...")
                 execution_result = self.execute_safe_transaction(safe_tx_hash)
                 if execution_result.get('status') == 'success':
                     safe_info['executed'] = True
                     safe_info['execution_tx_hash'] = execution_result.get('txHash')
                     safe_info['execution_message'] = 'Transaction executed successfully'
+                    logger.info(f"✅ Sell/close order automatically executed! TX: {execution_result.get('txHash')}")
                 else:
                     safe_info['execution_error'] = execution_result.get('error')
                     safe_info['execution_message'] = 'Auto-execution failed, transaction remains pending'
+                    logger.warning(f"⚠️ Sell/close auto-execution failed: {execution_result.get('error')}")
 
             if self.db_connected and position_id:
                 gmx_db.close_position(
@@ -676,7 +684,9 @@ class EnhancedGMXAPI:
             if buy_order_result.get('safe', {}).get('safeTxHash'):
                 buy_safe_tx_hash = buy_order_result['safe']['safeTxHash']
                 if auto_execute and buy_safe_tx_hash:
+                    logger.info("⏳ Waiting for transaction to be processed by Safe API...")
                     time.sleep(15)
+                    logger.info("🚀 Auto-executing buy order transaction...")
                     execution_result = self.execute_safe_transaction(buy_safe_tx_hash)
                     if execution_result.get('status') == 'success':
                         buy_order_result['execution'] = {
@@ -684,12 +694,14 @@ class EnhancedGMXAPI:
                             'txHash': execution_result.get('txHash'),
                             'message': 'Buy order executed successfully'
                         }
+                        logger.info(f"✅ Buy order automatically executed! TX: {execution_result.get('txHash')}")
                     else:
                         buy_order_result['execution'] = {
                             'status': 'error',
                             'error': execution_result.get('error'),
                             'message': 'Buy order execution failed'
                         }
+                        logger.warning(f"⚠️ Buy order auto-execution failed: {execution_result.get('error')}")
 
             if auto_execute and buy_order_result.get('execution', {}).get('status') == 'success':
                 time.sleep(15)
@@ -830,15 +842,19 @@ class EnhancedGMXAPI:
                         market_key=token_config['market_key']
                     )
             if auto_execute and safe_tx_hash:
+                logger.info("⏳ Waiting for transaction to be processed by Safe API...")
                 time.sleep(15)
+                logger.info("🚀 Auto-executing Take Profit transaction...")
                 execution_result = self.execute_safe_transaction(safe_tx_hash)
                 if execution_result.get('status') == 'success':
                     safe_info['executed'] = True
                     safe_info['execution_tx_hash'] = execution_result.get('txHash')
                     safe_info['execution_message'] = 'Take Profit order executed successfully'
+                    logger.info(f"✅ Take Profit automatically executed! TX: {execution_result.get('txHash')}")
                 else:
                     safe_info['execution_error'] = execution_result.get('error')
                     safe_info['execution_message'] = 'Take Profit order execution failed'
+                    logger.warning(f"⚠️ Take Profit auto-execution failed: {execution_result.get('error')}")
             
             # Restore original auto_execute configuration
             self.config.auto_execute_approvals = original_auto_execute
@@ -928,15 +944,19 @@ class EnhancedGMXAPI:
                         market_key=token_config['market_key']
                     )
             if auto_execute and safe_tx_hash:
+                logger.info("⏳ Waiting for transaction to be processed by Safe API...")
                 time.sleep(15)
+                logger.info("🚀 Auto-executing Stop Loss transaction...")
                 execution_result = self.execute_safe_transaction(safe_tx_hash)
                 if execution_result.get('status') == 'success':
                     safe_info['executed'] = True
                     safe_info['execution_tx_hash'] = execution_result.get('txHash')
                     safe_info['execution_message'] = 'Stop Loss order executed successfully'
+                    logger.info(f"✅ Stop Loss automatically executed! TX: {execution_result.get('txHash')}")
                 else:
                     safe_info['execution_error'] = execution_result.get('error')
                     safe_info['execution_message'] = 'Stop Loss order execution failed'
+                    logger.warning(f"⚠️ Stop Loss auto-execution failed: {execution_result.get('error')}")
             
             # Restore original auto_execute configuration
             self.config.auto_execute_approvals = original_auto_execute
@@ -1228,15 +1248,19 @@ class EnhancedGMXAPI:
                 )
 
             if auto_execute and safe_tx_hash:
+                logger.info("⏳ Waiting for transaction to be processed by Safe API...")
                 time.sleep(15)
+                logger.info("🚀 Auto-executing Close transaction...")
                 execution_result = self.execute_safe_transaction(safe_tx_hash)
                 if execution_result.get('status') == 'success':
                     safe_info['executed'] = True
                     safe_info['execution_tx_hash'] = execution_result.get('txHash')
                     safe_info['execution_message'] = 'Close order executed successfully'
+                    logger.info(f"✅ Close order automatically executed! TX: {execution_result.get('txHash')}")
                 else:
                     safe_info['execution_error'] = execution_result.get('error')
                     safe_info['execution_message'] = 'Close order execution failed'
+                    logger.warning(f"⚠️ Close order auto-execution failed: {execution_result.get('error')}")
 
             return {
                 'status': 'success',

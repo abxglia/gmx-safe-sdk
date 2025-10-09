@@ -567,6 +567,198 @@ def create_tp_order():
             'timestamp': datetime.now().isoformat()
         }), 500
 
+@app.route('/sl-order', methods=['POST'])
+def create_sl_order():
+    """Create a Stop Loss order using signal format similar to /position/create-with-tp-sl"""
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({
+                'status': 'error',
+                'error': 'No data provided'
+            }), 400
+
+        # Check if this is the signal format or direct API format
+        if 'Signal Message' in data and 'Token Mentioned' in data:
+            # Signal format - extract parameters
+            signal_message = data.get('Signal Message', '').lower()
+            token = data.get('Token Mentioned', '').upper()
+            tp1 = data.get('TP1')
+            tp2 = data.get('TP2')  # Optional, noted but not used for SL
+            sl = data.get('SL')
+            current_price = data.get('Current Price')
+            max_exit_time = data.get('Max Exit Time')
+            username = data.get('username', 'api_user')
+            safe_address = data.get('safeAddress')
+            auto_execute = str(data.get('autoExecute', False)).lower() == 'true'
+
+            # Validate all required signal fields in a single check
+            missing_fields = []
+            if not safe_address:
+                missing_fields.append('safeAddress')
+            if not signal_message:
+                missing_fields.append('Signal Message')
+            if not token:
+                missing_fields.append('Token Mentioned')
+            if sl is None:
+                missing_fields.append('SL')
+            if missing_fields:
+                return jsonify({
+                    'status': 'error',
+                    'error': f"Missing required field(s): {', '.join(missing_fields)}"
+                }), 400
+
+            # Convert to float and validate
+            try:
+                trigger_price = float(sl)
+                current_price_val = float(current_price) if current_price else None
+                tp1_val = float(tp1) if tp1 else None
+                tp2_val = float(tp2) if tp2 else None
+
+            except (ValueError, TypeError) as e:
+                return jsonify({
+                    'status': 'error',
+                    'error': f'Invalid numeric values in signal: {str(e)}'
+                }), 400
+
+            # Determine position direction
+            if signal_message in ['buy', 'long']:
+                is_long = True
+            elif signal_message in ['sell', 'short']:
+                is_long = False
+            else:
+                return jsonify({
+                    'status': 'error',
+                    'error': f'Invalid Signal Message: {signal_message}. Must be buy, long, sell, or short'
+                }), 400
+
+            # Default trading parameters for signals
+            size_usd = 2.1  # Default size for signals
+
+            # Log signal details
+            logger.info(f"📡 Processing signal format for Stop Loss order:")
+            logger.info(f"   Signal Message: {signal_message.upper()}")
+            logger.info(f"   Token: {token}")
+            logger.info(f"   Current Price: ${current_price_val}")
+            logger.info(f"   SL: ${trigger_price}")
+            if tp1_val:
+                logger.info(f"   TP1: ${tp1_val} (noted but not used for SL order)")
+            if tp2_val:
+                logger.info(f"   TP2: ${tp2_val} (noted but not used for SL order)")
+            logger.info(f"   Username: {username}")
+            logger.info(f"   Safe Address: {safe_address}")
+            if max_exit_time:
+                logger.info(f"   Max Exit Time: {max_exit_time}")
+
+            # Validate SL price makes sense for position direction
+            if current_price_val:
+                if is_long and trigger_price >= current_price_val:
+                    logger.warning(f"⚠️ SL ({trigger_price}) should be below current price ({current_price_val}) for long positions")
+                elif not is_long and trigger_price <= current_price_val:
+                    logger.warning(f"⚠️ SL ({trigger_price}) should be above current price ({current_price_val}) for short positions")
+
+        else:
+            # Direct API format (backward compatibility)
+            token = data.get('token', '').upper()
+            trigger_price = data.get('trigger_price')
+            is_long = data.get('is_long', True)
+            size_usd = data.get('size_usd')
+            safe_address = data.get('safeAddress')
+            auto_execute = data.get('autoExecute', False)
+            username = data.get('username', 'api_user')
+
+            # Validate required parameters in a single check
+            missing_fields = []
+            if not token:
+                missing_fields.append('token')
+            if trigger_price is None:
+                missing_fields.append('trigger_price')
+            if size_usd is None:
+                missing_fields.append('size_usd')
+            if missing_fields:
+                return jsonify({
+                    'status': 'error',
+                    'error': f"Missing required field(s): {', '.join(missing_fields)}"
+                }), 400
+
+            # Convert and validate numeric values
+            try:
+                trigger_price = float(trigger_price)
+                size_usd = float(size_usd)
+            except (ValueError, TypeError) as e:
+                return jsonify({
+                    'status': 'error',
+                    'error': f'Invalid numeric values: {str(e)}'
+                }), 400
+
+            logger.info(f"🎯 Creating Stop Loss order (direct format):")
+            logger.info(f"   Token: {token}")
+            logger.info(f"   Trigger Price: ${trigger_price}")
+            logger.info(f"   Size: ${size_usd}")
+            logger.info(f"   Position: {'LONG' if is_long else 'SHORT'}")
+
+        # Initialize API with safe_address if provided
+        if safe_address:
+            if not gmx_api.initialized or gmx_api.safe_address != safe_address:
+                logger.info(f"🔄 Re-initializing API with Safe address from request: {safe_address}")
+                gmx_api.initialize(safe_address=safe_address)
+
+        # Prepare kwargs for database tracking
+        kwargs = {
+            'username': username,
+            'original_signal': data
+        }
+
+        # Add signal_id if this is a signal format
+        signal_id = ""
+        if 'Signal Message' in data:
+            # Database logging is handled within the service layer
+            kwargs['signal_id'] = signal_id
+
+        # Create the stop loss order
+        result = gmx_api._create_stop_loss_order(
+            token=token,
+            size_usd=size_usd,
+            trigger_price=trigger_price,
+            is_long=is_long,
+            auto_execute=auto_execute,
+            **kwargs
+        )
+
+        # Add signal-specific metadata if it's a signal format
+        if 'Signal Message' in data:
+            result.update({
+                'signal_id': signal_id,
+                'signal_type': signal_message,
+                'signal_details': {
+                    'current_price': current_price_val,
+                    'take_profit_tp1': tp1_val,
+                    'take_profit_tp2': tp2_val,
+                    'stop_loss': trigger_price,
+                    'max_exit_time': max_exit_time,
+                    'safe_address': safe_address
+                },
+                'original_signal': data
+            })
+
+        return jsonify(result)
+
+    except ValueError as e:
+        logger.error(f"❌ Validation error: {e}")
+        return jsonify({
+            'status': 'error',
+            'error': f'Invalid input: {str(e)}',
+            'timestamp': datetime.now().isoformat()
+        }), 400
+
+    except Exception as e:
+        logger.error(f"❌ Error creating Stop Loss order: {e}")
+        return jsonify({
+            'status': 'error',
+            'error': str(e),
+            'timestamp': datetime.now().isoformat()
+        }), 500
+
 @app.route('/positions', methods=['GET'])
 def get_positions():
     """Get current positions"""
